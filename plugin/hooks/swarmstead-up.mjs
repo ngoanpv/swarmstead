@@ -50,7 +50,9 @@ async function main() {
   try { if (Date.now() - fs.statSync(lock).mtimeMs < 30_000) return; } catch {} // another session is starting it
   const { cmd, args, shell } = launcher();
   const log = fs.openSync(path.join(HOME, 'daemon.log'), 'a');
-  const child = spawn(cmd, [...args, 'start', '--port', base.port || '80'], { detached: true, stdio: ['ignore', log, log], shell, windowsHide: true });
+  // Run from our own folder: inside a project named "swarmstead" (this repo), npx
+  // mistakes the project for the package and fails with "swarmstead: command not found".
+  const child = spawn(cmd, [...args, 'start', '--port', base.port || '80'], { cwd: HOME, detached: true, stdio: ['ignore', log, log], shell, windowsHide: true });
   child.on('error', () => {});
   fs.writeFileSync(lock, String(child.pid || ''));
   child.unref();

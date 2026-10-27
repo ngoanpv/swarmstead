@@ -1,6 +1,6 @@
 {
   "name": "swarmstead",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Watch your Claude Code (and Codex) agents live as pixel characters: handoffs, cost, loops, stuck permissions, context pressure — and familiars that evolve with good habits.",
   "author": "ngoanpv (https://github.com/ngoanpv)",
   "homepage": "https://github.com/ngoanpv/swarmstead#readme",
