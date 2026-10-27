@@ -7,6 +7,8 @@ import { Sound } from './sound.js';
 import { getDict, alertText, alertHint } from '../core/i18n.js';
 import { fmtUsd, fmtTokens, fmtDuration } from '../core/util.js';
 import { STAGES, SPECIES, TRAITS } from '../core/evolution.js';
+import { postmortem, postmortemMarkdown } from '../core/postmortem.js';
+import { Replay, parseEvents } from './replay.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -17,7 +19,10 @@ try { lang = localStorage.getItem('swarmstead.lang') || (navigator.language || '
 let T = getDict(lang);
 
 const sound = new Sound();
-const state = { snap: null, roster: [], selected: null, mode: 'demo', log: [], seenAlerts: new Set(), tab: 'alerts', sim: null, speed: 1, expanded: new Set() };
+const state = {
+  snap: null, roster: [], selected: null, mode: 'demo', log: [], seenAlerts: new Set(), tab: 'alerts', sim: null, speed: Number(params.get('speed')) || 1, expanded: new Set(),
+  token: params.get('t') || '', approvals: { pending: [], recent: [] }, replay: null, replaying: false, replayEvents: null, replayLabel: '',
+};
 
 const world = new WorldView($('world'), {
   sound,
@@ -41,15 +46,26 @@ async function daemonReachable() {
   try { const r = await fetch('/api/health', { cache: 'no-store' }); return r.ok; } catch { return false; }
 }
 
-function startLive() {
+const tq = () => (state.token ? `?t=${encodeURIComponent(state.token)}` : '');
+async function api(path, opts = {}) {
+  const r = await fetch(path + (path.includes('?') ? (state.token ? `&t=${encodeURIComponent(state.token)}` : '') : tq()), {
+    ...opts, headers: { 'content-type': 'application/json', ...(state.token ? { 'x-swarmstead-token': state.token } : {}), ...(opts.headers || {}) },
+  });
+  if (!r.ok) throw new Error(`${r.status}`);
+  return r.json();
+}
+
+async function startLive() {
   state.mode = 'live';
   setMode('live');
-  const es = new EventSource('/api/stream');
+  try { const sess = await api('/api/session'); if (sess.token) state.token = sess.token; } catch { /* remote without token: the stream will say so */ }
+  const es = new EventSource(`/api/stream${tq()}`);
   es.onmessage = (m) => {
     let msg; try { msg = JSON.parse(m.data); } catch { return; }
-    if (msg.type === 'snapshot') onSnapshot(msg.state);
-    else if (msg.type === 'fx') onFx(msg.fx);
-    else if (msg.type === 'roster') onRoster(msg.roster);
+    if (msg.type === 'snapshot') { if (!state.replaying) onSnapshot(msg.state); else state.liveSnap = msg.state; }
+    else if (msg.type === 'fx') { if (!state.replaying) onFx(msg.fx); }
+    else if (msg.type === 'roster') { if (!state.replaying) onRoster(msg.roster); }
+    else if (msg.type === 'approvals') onApprovals(msg.approvals);
     else if (msg.type === 'hello') setMode('live');
   };
   es.onerror = () => setMode('offline');
@@ -59,7 +75,13 @@ async function startDemo() {
   state.mode = 'demo';
   setMode('demo');
   const { DemoSim } = await import('./sim/demo.js');
-  state.sim = new DemoSim({ onFx, onSnapshot, onRoster, speed: state.speed });
+  state.sim = new DemoSim({
+    onFx: (fx) => { if (!state.replaying) onFx(fx); },
+    onSnapshot: (s) => { if (!state.replaying) onSnapshot(s); },
+    onRoster: (r) => { if (!state.replaying) onRoster(r); },
+    onApprovals,
+    speed: state.speed,
+  });
   state.sim.start();
 }
 
@@ -68,6 +90,7 @@ function setMode(m) {
   b.className = `badge ${m}`;
   b.textContent = m === 'live' ? T.ui.live : m === 'demo' ? T.ui.demo : T.ui.offline;
   $('b-speed').hidden = state.mode !== 'demo';
+  $('b-speed').textContent = `${state.speed}×`;
   $('b-demo').textContent = state.mode === 'demo' ? 'LIVE' : 'DEMO';
   $('b-demo').hidden = !!globalThis.__SWARMSTEAD_DEMO__;
 }
@@ -99,6 +122,7 @@ function onFx(fx) {
     if (f.fx === 'evolve' || f.fx === 'hatch') addLog(now, `★ ${who} ${f.fx === 'hatch' ? T.ui.hatched : T.ui.evolved} ${f.to}`, 'epic');
     else if (f.fx === 'levelup') addLog(now, `▲ ${who} → ${T.ui.level} ${f.level}`, 'xp');
     else if (f.fx === 'shiny') addLog(now, `✦ ${who} ${T.ui.shiny}`, 'epic');
+    else if (f.fx === 'forecast') addLog(now, `≈ ${who}: ${f.workflow || ''} ${T.ui.usually} ${fmtUsd(f.expectedCost)} (${f.samples}×)`, 'xp');
     else if (f.fx === 'alert' && !state.seenAlerts.has(f.alert.id + f.alert.severity)) {
       state.seenAlerts.add(f.alert.id + f.alert.severity);
       addLog(now, `⚠ ${alertText(T, f.alert)}`, 'warn');
@@ -143,6 +167,23 @@ function renderHeader() {
     $('s-block').innerHTML = `${fmtDuration(Math.max(0, left))}<small> ${esc(T.ui.left)}</small>`;
     $('s-block-bar').style.width = `${Math.min(100, ((s.now - s.block.start) / (s.block.end - s.block.start)) * 100)}%`;
   }
+  // forecasts: provider limit ETA, else the 5-hour block pace
+  const bf = s.block?.forecast, lf = s.limitForecasts?.codex;
+  const fEl = $('s-block-f');
+  let warn = false;
+  if (lf && lf.eta && lf.hitsBeforeReset) { fEl.textContent = `${T.ui.limitIn} ${fmtDuration(lf.eta - s.now)}`; warn = true; }
+  else if (bf) { fEl.textContent = `${T.ui.blockPace} ~${fmtUsd(bf.projectedEnd)}${bf.ceiling ? ` / ${fmtUsd(bf.ceiling)}` : ''}`; warn = bf.hitsBeforeReset || bf.aboveUsual; }
+  else fEl.textContent = '';
+  fEl.style.color = warn ? 'var(--gold)' : '';
+  $('s-block-box').classList.toggle('hot', !!(lf?.hitsBeforeReset && lf.eta - s.now < 30 * 60_000));
+  // shipping: cost per commit across projects today
+  const L = s.ledger || [];
+  const commits = L.reduce((n, p) => n + p.commits, 0);
+  const shippedN = L.reduce((n, p) => n + (p.shipped || 0), 0);
+  $('s-commit').textContent = shippedN ? fmtUsd(L.reduce((n, p) => n + (p.shippedCost || 0), 0) / shippedN) : '—';
+  const unshipped = L.reduce((n, p) => n + p.unshipped, 0);
+  $('s-commit2').textContent = `${commits} ${T.ui.commits.toLowerCase()} · +${fmtUsd(unshipped)}`;
+  $('s-commit2').title = `${fmtUsd(unshipped)} ${T.ui.unshipped.toLowerCase()}`;
   drawSpark(s.burn);
   $('clock').textContent = new Date(s.now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
@@ -302,7 +343,193 @@ function renderBottom() {
   if (state.tab === 'log') renderLog();
   if (state.tab === 'roster') renderRoster();
   if (state.tab === 'timeline') renderTimeline();
+  if (state.tab === 'ledger') renderLedger();
 }
+
+// ---------------------------------------------------------------- ledger: cost per commit / PR
+
+function renderLedger() {
+  const L = state.snap.ledger || [];
+  if (!L.length) { $('pane-ledger').innerHTML = `<div class="allclear" style="color:var(--muted)">${esc(T.ui.noLedger)}</div>`; return; }
+  const rows = L.map((p) => `<tr>
+    <td><b class="px">${esc(p.project)}</b></td>
+    <td class="num">${fmtUsd(p.cost)}</td>
+    <td class="num">${p.commits}</td>
+    <td class="num big">${p.costPerCommit != null ? fmtUsd(p.costPerCommit) : '—'}</td>
+    <td class="num">${p.prsOpened} ${esc(T.ui.opened)} · ${p.prsMerged} ${esc(T.ui.merged)}</td>
+    <td class="num">${p.costPerPr != null ? fmtUsd(p.costPerPr) : '—'}</td>
+    <td class="num" style="color:${p.unshipped > 1 ? 'var(--gold)' : 'var(--muted)'}">${fmtUsd(p.unshipped)}</td>
+    <td><div class="commits">${p.recent.slice().reverse().map((c) => `<span title="${new Date(c.ts).toLocaleTimeString()}">${esc(c.sha ? c.sha.slice(0, 7) : (c.human ? 'you' : 'agent'))} <b>${fmtUsd(c.cost)}</b></span>`).join('')}</div></td>
+  </tr>`).join('');
+  $('pane-ledger').innerHTML = `<div style="overflow-x:auto"><table class="ledger-table"><thead><tr>
+    <th>${esc(T.ui.project)}</th><th>${esc(T.ui.costToday)}</th><th>${esc(T.ui.commits)}</th><th>${esc(T.ui.perCommit)}</th><th>${esc(T.ui.prs)}</th><th>$/PR</th><th>${esc(T.ui.unshipped)}</th><th>${esc(T.ui.recentCommits)}</th>
+  </tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+// ---------------------------------------------------------------- approvals (answer permission prompts here / on the phone)
+
+function onApprovals(list) {
+  state.approvals = list || { pending: [], recent: [] };
+  renderApprovals();
+}
+
+function renderApprovals() {
+  const pend = state.approvals.pending || [];
+  $('approvals').hidden = pend.length === 0;
+  $('approvals-n').textContent = pend.length;
+  const now = Date.now();
+  $('approvals-list').innerHTML = pend.map((a) => `<div class="ap">
+    <div class="who"><span>${esc(a.label || a.agentId)}${a.sub ? ' <small>subagent</small>' : ''}</span><small>${esc(T.ui.expiresIn)} ${fmtDuration(Math.max(0, a.expires - now))}</small></div>
+    <code>${esc(a.tool)}${a.detail ? ': ' + esc(a.detail) : ''}</code>
+    <div class="acts">
+      <button class="btn sm ok" data-ap="${esc(a.id)}" data-d="allow">${esc(T.ui.approve)}</button>
+      ${a.canRemember ? `<button class="btn sm" data-ap="${esc(a.id)}" data-d="allow-session">${esc(T.ui.allowSession)}</button>` : ''}
+      <button class="btn sm no" data-ap="${esc(a.id)}" data-d="deny">${esc(T.ui.deny)}</button>
+    </div></div>`).join('');
+  for (const b of document.querySelectorAll('[data-ap]')) b.onclick = () => decide(b.dataset.ap, b.dataset.d);
+}
+
+async function decide(id, d) {
+  state.approvals.pending = state.approvals.pending.filter((a) => a.id !== id);
+  renderApprovals();
+  if (state.mode === 'demo') return state.sim?.decide(id, d);
+  try { await api(`/api/approvals/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ decision: d }) }); }
+  catch (e) { toast({ severity: 'warn', custom: `Approval failed (${e.message}).` }); }
+}
+setInterval(() => { if ((state.approvals.pending || []).length) renderApprovals(); }, 1000);
+
+// ---------------------------------------------------------------- replay + post-mortem
+
+async function openReplay() {
+  $('replay').hidden = false;
+  const sel = $('rp-src');
+  const opts = [];
+  if (state.mode === 'demo') opts.push(['demo', T.ui.thisDemo]);
+  else {
+    try { for (const d of await api('/api/replay/days')) opts.push([`day:${d.day}`, `${d.day} (${Math.max(1, Math.round(d.bytes / 1024))} KB)`]); } catch {}
+  }
+  opts.push(['file', T.ui.loadFile]);
+  sel.innerHTML = opts.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('');
+  $('rp-export').hidden = state.mode === 'demo' || !!globalThis.__SWARMSTEAD_DEMO__;
+  await loadSource(sel.value);
+}
+
+async function loadSource(v) {
+  if (v === 'file') { $('rp-file').click(); return; }
+  let events = [];
+  if (v === 'demo') events = state.sim?.getEvents() || [];
+  else if (v.startsWith('day:')) { try { events = await api(`/api/replay/${v.slice(4)}`); } catch { events = []; } }
+  startReplay(events, v === 'demo' ? T.ui.thisDemo : v.slice(4));
+}
+
+function startReplay(events, label = '') {
+  state.replay?.destroy();
+  if (!events.length) { toast({ severity: 'warn', custom: T.ui.replayEmpty }); return; }
+  state.replaying = true;
+  state.replayEvents = events;
+  state.replayLabel = label;
+  world.reset();
+  state.seenAlerts.clear();
+  state.replay = new Replay(events, { onFx, onSnapshot, onRoster, onTime: updateScrubber });
+  state.replay.setSpeed(Number($('rp-speed').value));
+  state.replay.play();
+  $('mode').className = 'badge demo';
+  $('mode').textContent = `${T.ui.replay.toUpperCase()}`;
+}
+
+function updateScrubber(clock, r) {
+  if (!r) return;
+  const span = Math.max(1, r.t1 - r.t0);
+  if (!state.dragging) $('rp-pos').value = Math.round(((clock - r.t0) / span) * 1000);
+  $('rp-time').textContent = new Date(clock).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  $('rp-play').textContent = r.playing ? '❚❚' : '▶';
+}
+
+function exitReplay() {
+  state.replay?.destroy();
+  state.replay = null;
+  state.replaying = false;
+  $('replay').hidden = true;
+  world.reset();
+  state.seenAlerts.clear();
+  setMode(state.mode);
+  if (state.liveSnap) onSnapshot(state.liveSnap);
+}
+
+function showPostmortem() {
+  const events = state.replayEvents || state.sim?.getEvents() || [];
+  if (!events.length) { toast({ severity: 'warn', custom: T.ui.replayEmpty }); return; }
+  const pm = postmortem(events, { lang });
+  const md = postmortemMarkdown(pm, { title: `Swarmstead post-mortem${state.replayLabel ? ' · ' + state.replayLabel : ''}` });
+  $('pm-md').value = md;
+  const bars = (map, nameOf = (k) => k) => {
+    const rows = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 6);
+    const max = Math.max(0.0001, ...rows.map((r) => r[1]));
+    return rows.map(([k, v]) => `<div class="pm-row"><span>${esc(nameOf(k))}</span><span>${fmtUsd(v)}</span><span><div class="bar"><i style="width:${Math.round((v / max) * 100)}%;background:var(--violet)"></i></div></span></div>`).join('') || `<div class="pm-row"><span style="color:var(--muted)">—</span></div>`;
+  };
+  const wastePct = pm.cost ? Math.round((pm.waste / pm.cost) * 100) : 0;
+  $('pm-body').innerHTML = `
+    <div class="pm-kpis">
+      <div><small>${esc(T.ui.spent)}</small><b>${fmtUsd(pm.cost)}</b></div>
+      <div class="${wastePct >= 10 ? 'bad' : ''}"><small>${esc(T.ui.waste)}</small><b>${fmtUsd(pm.waste)} · ${wastePct}%</b></div>
+      <div><small>${esc(T.ui.cache)}</small><b>${Math.round(pm.cacheHit * 100)}%</b></div>
+      <div><small>${esc(T.ui.perCommit)}</small><b>${pm.costPerCommit != null ? fmtUsd(pm.costPerCommit) : '—'}</b></div>
+      <div><small>${esc(T.ui.turns)}</small><b>${pm.turnCount}</b></div>
+      <div><small>${esc(T.ui.incidents)}</small><b>${pm.incidents.length}</b></div>
+    </div>
+    <div class="pm-grid">
+      <div class="pm-sec"><h3>${esc(T.ui.byActivity)}</h3>${bars(pm.byActivity, (k) => T.status[k] || k)}</div>
+      <div class="pm-sec"><h3>${esc(T.ui.byProject)}</h3>${bars(pm.byProject)}</div>
+      <div class="pm-sec"><h3>${esc(T.ui.byType)}</h3>${bars(pm.byType)}</div>
+      <div class="pm-sec"><h3>${esc(T.ui.byModel)}</h3>${bars(pm.byModel, shortModel)}</div>
+    </div>
+    <div class="pm-sec"><h3>${esc(T.ui.topTurns)}</h3><div style="overflow-x:auto"><table class="ledger-table"><thead><tr><th>Agent</th><th>${esc(T.ui.project)}</th><th>$</th><th>Tools</th><th>Edits</th><th>Loops</th><th>Time</th></tr></thead><tbody>
+      ${pm.topTurns.map((t) => `<tr><td>${esc(t.type)}</td><td>${esc(t.project)}</td><td class="num big">${fmtUsd(t.cost)}</td><td class="num">${t.tools}</td><td class="num">${t.edits}</td><td class="num" style="color:${t.loops ? 'var(--red)' : ''}">${t.loops}</td><td class="num">${fmtDuration(t.durationMs)}</td></tr>`).join('')}
+    </tbody></table></div></div>
+    <div class="pm-sec"><h3>${esc(T.ui.incidents)}</h3><ul class="pm-list">${pm.incidents.slice(0, 15).map((i) => `<li><span class="sev ${i.severity}" style="display:inline-block;padding:2px 4px;margin-right:6px">${i.severity.toUpperCase()}</span>${new Date(i.ts).toLocaleTimeString()} · ${esc(alertText(T, i))}</li>`).join('') || '<li>—</li>'}</ul></div>`;
+  $('pm').hidden = false;
+}
+
+$('b-replay').onclick = () => { if ($('replay').hidden) openReplay(); else exitReplay(); };
+$('rp-src').onchange = (e) => loadSource(e.target.value);
+$('rp-file').onchange = async (e) => { const f = e.target.files?.[0]; if (f) startReplay(parseEvents(await f.text()), f.name); };
+$('rp-play').onclick = () => { const r = state.replay; if (!r) return; r.playing ? r.pause() : r.play(); updateScrubber(r.clock, r); };
+$('rp-speed').onchange = (e) => state.replay?.setSpeed(Number(e.target.value));
+$('rp-pos').oninput = () => { state.dragging = true; };
+$('rp-pos').onchange = (e) => {
+  state.dragging = false;
+  const r = state.replay; if (!r) return;
+  const wasPlaying = r.playing;
+  world.reset();
+  r.seek(r.t0 + (Number(e.target.value) / 1000) * (r.t1 - r.t0));
+  if (wasPlaying) r.play();
+};
+$('rp-pm').onclick = showPostmortem;
+$('rp-exit').onclick = exitReplay;
+$('rp-export').onclick = () => {
+  const blob = new Blob([JSON.stringify(state.replayEvents || [])], { type: 'application/json' });
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `swarmstead-${state.replayLabel || 'events'}.json` });
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+};
+$('pm-close').onclick = () => { $('pm').hidden = true; };
+$('pm').onclick = (e) => { if (e.target === $('pm')) $('pm').hidden = true; };
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('pm').hidden = true; });
+$('pm-copy').onclick = async () => {
+  const md = $('pm-md').value;
+  try { await navigator.clipboard.writeText(md); $('pm-copy').textContent = T.ui.copied; setTimeout(() => { $('pm-copy').textContent = T.ui.copyMd; }, 1500); }
+  catch { const ta = $('pm-md'); ta.hidden = false; ta.style.cssText = 'margin:0 14px 14px;height:160px;background:#120e1b;color:var(--text);border:1px solid var(--line)'; ta.select(); }
+};
+// drag & drop an exported file anywhere to replay it
+let dragDepth = 0;
+window.addEventListener('dragenter', (e) => { if (e.dataTransfer?.types?.includes('Files')) { dragDepth++; $('dropzone').hidden = false; } });
+window.addEventListener('dragleave', () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) $('dropzone').hidden = true; });
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('drop', async (e) => {
+  e.preventDefault(); dragDepth = 0; $('dropzone').hidden = true;
+  const f = e.dataTransfer?.files?.[0];
+  if (!f) return;
+  try { $('replay').hidden = false; startReplay(parseEvents(await f.text()), f.name); } catch { toast({ severity: 'warn', custom: T.ui.replayEmpty }); }
+});
 
 function renderAlerts() {
   const s = state.snap;
@@ -366,7 +593,7 @@ function toast(al) {
   const el = document.createElement('div');
   el.className = `toast ${al.severity === 'crit' ? '' : 'warn'}`;
   el.className = `toast ${al.severity === 'crit' ? '' : al.severity === 'info' ? 'info' : 'warn'}`;
-  const head = al.severity === 'crit' ? '⚠ CRITICAL' : al.severity === 'info' ? '★ ARENA' : '⚠ WARNING';
+  const head = al.severity === 'crit' ? '⚠ CRITICAL' : al.severity === 'info' ? '★ ARENA' : al.custom ? '•' : '⚠ WARNING';
   el.innerHTML = `<b style="color:${al.severity === 'crit' ? 'var(--red)' : al.severity === 'info' ? 'var(--violet)' : 'var(--gold)'}">${head}</b>${esc(al.custom || alertText(T, al))}`;
   $('toasts').appendChild(el);
   setTimeout(() => el.remove(), 6500);
@@ -387,7 +614,7 @@ function applyLang() {
   renderViews();
   setMode(state.mode === 'live' ? 'live' : 'demo');
   renderLegend();
-  renderSide(); renderBottom();
+  renderSide(); renderBottom(); renderApprovals();
 }
 
 function renderLegend() {
@@ -438,7 +665,7 @@ function renderTimeline() {
   if (!run) { pane.innerHTML = `<div class="allclear" style="color:var(--muted)">${esc(T.ui.noRun)}</div>`; return; }
   if (!$('tl')) pane.innerHTML = '<div class="tl-head" id="tl-head"></div><div class="tl-wrap"><canvas id="tl"></canvas></div>';
   const now = state.snap.now;
-  $('tl-head').innerHTML = `<b>${esc(run.workflow || run.project)}</b> · ${run.done + run.failed}/${run.total} ${esc(T.ui.doneN)} · ${run.running} ${esc(T.ui.running)}${run.failed ? ` · <span style="color:var(--red)">${run.failed} ${esc(T.ui.failedN)}</span>` : ''} · ${fmtUsd(run.cost)} · ${fmtDuration((run.endedAt || now) - run.startedAt)}`;
+  $('tl-head').innerHTML = `<b>${esc(run.workflow || run.project)}</b> · ${run.done + run.failed}/${run.total} ${esc(T.ui.doneN)} · ${run.running} ${esc(T.ui.running)}${run.failed ? ` · <span style="color:var(--red)">${run.failed} ${esc(T.ui.failedN)}</span>` : ''} · ${fmtUsd(run.cost)}${run.forecast?.projectedCost != null && !run.endedAt ? ` <span style="color:${run.forecast.projectedCost > (run.forecast.expectedCost || Infinity) * 1.5 ? 'var(--gold)' : 'var(--muted)'}">(~${fmtUsd(run.forecast.projectedCost)} ${esc(T.ui.projected)}${run.forecast.samples ? `, ${esc(T.ui.usually)} ${fmtUsd(run.forecast.expectedCost)}` : ''})</span>` : ''} · ${fmtDuration((run.endedAt || now) - run.startedAt)}`;
   const cv = $('tl');
   const W = Math.max(320, cv.parentElement.clientWidth - 2);
   const rows = run.timeline.length;

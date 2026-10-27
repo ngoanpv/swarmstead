@@ -1,7 +1,15 @@
 {
   "name": "swarmstead",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Watch your Claude Code (and Codex) agents live as pixel characters: handoffs, cost, loops, stuck permissions, context pressure — and familiars that evolve with good habits.",
+  "homepage": "https://github.com/ngoanpv/swarmstead#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ngoanpv/swarmstead.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ngoanpv/swarmstead/issues"
+  },
   "type": "module",
   "bin": {
     "swarmstead": "bin/swarmstead.js"
@@ -13,7 +21,7 @@
     "web",
     "plugin",
     ".claude-plugin",
-    "docs",
+    "docs/*.md",
     "README.md",
     "LICENSE"
   ],

@@ -43,7 +43,9 @@ function help() {
 ${c.bold('swarmstead')} — your coding agents, as a living pixel village
 
   swarmstead [start] [--port 4317] [--open]   run the daemon and open the village
-  swarmstead install claude [--project]       forward Claude Code hook events
+  swarmstead install claude [--project] [--gate]  forward Claude Code hook events
+                                                  (--gate: approve prompts from the village/phone + budget brake)
+  swarmstead install git                          book commits in this repo (cost per commit)
   swarmstead uninstall claude [--project]
   swarmstead install codex                    (beta) forward Codex CLI hook events
   swarmstead uninstall codex
@@ -59,7 +61,7 @@ async function start() {
   const port = Number(opt('port', process.env.SWARMSTEAD_PORT || 4317));
   let d;
   try {
-    d = await startDaemon({ port });
+    d = await startDaemon({ port, ...(flag('lan') ? { lan: true } : {}) });
   } catch (err) {
     if (err.code === 'EADDRINUSE') {
       console.error(c.yellow(`Port ${port} is busy — is Swarmstead already running? Try --port 4318`));
@@ -70,7 +72,7 @@ async function start() {
   const { installClaudeHint } = await hints();
   console.log(`
   ${c.bold('🏘  Swarmstead')} is running at ${c.green(d.url + '/web/')}
-  ${c.dim(`demo mode: ${d.url}/web/?demo`)}
+  ${c.dim(`demo mode: ${d.url}/web/?demo`)}${d.cfg.lan ? `\n  ${c.yellow('LAN mode')}: on your phone open ${c.bold(`http://<this-computer-ip>:${d.cfg.port}/web/?t=${d.token}`)}` : ''}
   ${c.dim(`picked up ${d.booted.claude} Claude transcript(s), ${d.booted.codex} Codex rollout(s) from today`)}
 ${installClaudeHint}`);
   if (flag('open')) openBrowser(`${d.url}/web/`);
@@ -94,9 +96,19 @@ function safeList(dir) { try { return fs.readdirSync(dir); } catch { return []; 
 async function install(what) {
   const m = await import('../server/install.js');
   if (what === 'claude') {
-    const r = m.installClaude({ scope: flag('project') ? 'project' : 'user' });
+    const { loadConfig } = await import('../server/config.js');
+    const g = loadConfig().gate;
+    const r = m.installClaude({ scope: flag('project') ? 'project' : 'user', gate: flag('gate'), waitSec: Math.max(g.waitSubSec, g.waitMainSec) });
     console.log(`${c.green('✓')} Added ${r.events} async hooks to ${r.file}`);
+    if (r.gate) {
+      console.log(`${c.green('✓')} Added the gate (remote approvals + budget brake). It fails open: if Swarmstead isn't running, nothing changes.`);
+      console.log(c.dim(`  Subagent prompts wait up to ${g.waitSubSec}s for your answer; main-session prompts wait ${g.waitMainSec}s (change "gate" in ~/.swarmstead/config.json).`));
+    }
     console.log(c.dim('  A backup was saved next to it (*.swarmstead.bak). New Claude Code sessions will show up in the village.'));
+  } else if (what === 'git') {
+    const r = m.installGit({ cwd: process.cwd() });
+    console.log(`${c.green('✓')} Added a post-commit hook: ${r.file}`);
+    console.log(c.dim('  Each commit in this repo now books the agent cost spent since the previous one.'));
   } else if (what === 'codex') {
     const r = m.installCodex();
     console.log(`${c.green('✓')} Added ${r.events} hooks to ${r.file}  ${c.yellow('(beta)')}`);
@@ -109,6 +121,11 @@ async function install(what) {
 
 async function uninstall(what) {
   const m = await import('../server/install.js');
+  if (what === 'git') {
+    const r = m.uninstallGit({ cwd: process.cwd() });
+    console.log(r.removed ? `${c.green('✓')} Removed the Swarmstead line from ${r.file}` : 'Nothing to remove.');
+    return;
+  }
   if (what === 'claude') {
     const r = m.uninstallClaude({ scope: flag('project') ? 'project' : 'user' });
     console.log(r.removed ? `${c.green('✓')} Removed Swarmstead hooks from ${r.file}` : `Nothing to remove in ${r.file}`);

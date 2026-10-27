@@ -109,6 +109,15 @@ export class WorldView {
     this.onSelect(id);
   }
 
+  /** Forget every villager and effect (used when a replay starts or seeks). */
+  reset() {
+    this.actors.clear();
+    this.particles = []; this.projectiles = []; this.floaters = []; this.sequences = [];
+    this.monsters.clear(); this.pendingReturns.clear(); this.pendingFanins.clear();
+    this.deskOwner.clear(); this.focusRun = null; this.arena.key = '';
+    this.selected = null;
+  }
+
   setViewMode(mode) {
     this.viewMode = mode;
     this.applyView(mode === 'auto' ? this.autoView() : mode, false);
@@ -301,6 +310,17 @@ export class WorldView {
         case 'model': if (a) { a.bubble = { icon: 'swap', until: now + 2000 }; this.floater(a.x, a.y - 32, shortModel(f.to).toUpperCase(), '#9ff3ff', 1800); } break;
         case 'note': if (a) this.floater(a.x, a.y - 32, f.text, '#d7c6ff', 1600); break;
         case 'fanin': this.pendingFanins.set(f.agentId, { f, at: now }); break;
+        case 'unverified':
+          if (a) { a.bubble = { icon: 'unverified', until: now + 4000 }; this.floater(a.x, a.y - 36, 'UNVERIFIED?', '#ffb35c', 2400); this.sound?.play('alert'); }
+          break;
+        case 'mergeRisk': {
+          const b = f.other && this.actors.get(f.other);
+          if (a) this.floater(a.x, a.y - 36, 'MERGE RISK', '#ff9a3c', 2400);
+          if (a && b && this.visible(a) && this.visible(b)) this.sequences.push({ kind: 'merge', a, b, t0: now, dur: 4000 });
+          break;
+        }
+        case 'ship': this.ship(a, f); break;
+        case 'forecast': if (a) this.floater(a.x, a.y - 44, `USUALLY ${fmtUsd(f.expectedCost)}`, '#9ff3ff', 3200); break;
         case 'stage.done': this.stageClear(f); break;
         case 'run.start': this.portalPulse = 1; break;
         case 'alert':
@@ -341,6 +361,22 @@ export class WorldView {
       done: () => this.burst(target.x, target.y - 12, ['#ffe08a', '#ffffff'], 6),
     });
     this.sound?.play('handoff');
+  }
+
+  /** Commits, pushes and PRs: a parcel leaves for the door (or a stamp in the arena). */
+  ship(a, f) {
+    const label = f.action === 'commit' ? `COMMIT${f.cost ? ' ' + fmtUsd(f.cost) : ''}` : f.action === 'push' ? 'PUSHED' : f.action === 'pr.open' ? `PR OPENED${f.cost ? ' ' + fmtUsd(f.cost) : ''}` : 'PR MERGED!';
+    const color = f.action === 'pr.merge' ? '#7dff9a' : '#ffd34d';
+    if (a && this.visible(a)) {
+      const door = this.view === 'room' ? this.scene.stations.door[0] : this.arena.tome;
+      this.projectiles.push({ kind: 'parcel', x0: a.x, y0: a.y - 12, x1: door.x, y1: door.y - 10, t: 0, dur: 1.1, arc: 26, done: () => this.burst(door.x, door.y - 10, ['#c58b4d', '#ffd34d'], 8) });
+      this.floater(a.x, a.y - 40, label, color, 2200);
+    } else if (this.view === 'room') {
+      const d = this.scene.stations.door[0];
+      this.floater(d.x, d.y - 30, `${(f.project || '').toUpperCase()} ${label}`, color, 2200);
+    }
+    if (f.action === 'pr.merge') this.burst((a || this.scene.stations.door[0]).x, (a || this.scene.stations.door[0]).y - 14, ['#7dff9a', '#ffd34d', '#ffffff', '#9ff3ff'], 30);
+    this.sound?.play(f.action === 'pr.merge' ? 'fanin' : 'level');
   }
 
   /** A report flying back without its author walking (squads, arena). */
@@ -954,6 +990,14 @@ export class WorldView {
     const k = easeInOut(Math.min(1, pr.t));
     const px = pr.x0 + (pr.x1 - pr.x0) * k;
     const py = pr.y0 + (pr.y1 - pr.y0) * k - Math.sin(k * Math.PI) * pr.arc;
+    if (pr.kind === 'parcel') {
+      const X = Math.round(px) - 3, Y = Math.round(py) - 3;
+      x.fillStyle = '#3a2414'; x.fillRect(X - 1, Y - 1, 8, 7);
+      x.fillStyle = '#c58b4d'; x.fillRect(X, Y, 6, 5);
+      x.fillStyle = '#e8b878'; x.fillRect(X, Y, 6, 1);
+      x.fillStyle = '#ffd34d'; x.fillRect(X + 2, Y, 2, 5);
+      return;
+    }
     if (pr.kind === 'coin') {
       const spin = Math.floor(t / 80) % 4;
       const w = [3, 2, 1, 2][spin];
@@ -982,6 +1026,14 @@ export class WorldView {
       x.globalAlpha = 1 - k; ringPixels(x, a.x, a.y - 8, r, r * 0.6, s.color); x.globalAlpha = 1;
     }
     if (s.kind === 'zap' && Math.floor(t / 60) % 2) this.lightning(x, s.a.x, s.a.y - 12, s.b.x, s.b.y - 12, '#ffffff');
+    if (s.kind === 'merge' && !s.a.gone && !s.b.gone) {
+      // dashed orange line between two worktrees heading for the same conflict
+      const n = Math.max(6, Math.round(Math.hypot(s.b.x - s.a.x, s.b.y - s.a.y) / 4));
+      for (let i = 0; i < n; i++) if ((i + Math.floor(t / 120)) % 3 !== 0) {
+        x.fillStyle = '#ff9a3c';
+        x.fillRect(Math.round(s.a.x + ((s.b.x - s.a.x) * i) / n), Math.round(s.a.y - 10 + ((s.b.y - s.a.y) * i) / n), 1, 1);
+      }
+    }
     if (s.kind === 'tome') {
       // reports orbit, spiral in, and bind into a glowing book
       const cx = Math.round(s.at.x), cy = Math.round(s.at.y - 30);
@@ -1048,13 +1100,13 @@ export class WorldView {
 
 function drawBubble(x, bx, by, icon, t) {
   const w = icon === 'dots' || icon === 'zz' || icon === 'exhausted' ? 11 : 9, h = 8;
-  const col = { alert: '#ff4d6d', question: '#4d9dff', check: '#3ccf6e', spark: '#ffd34d', dots: '#ffffff', zz: '#ffffff', exhausted: '#ff9a3c', deny: '#ff4d6d', swap: '#4dd0c8' }[icon] || '#ffffff';
+  const col = { alert: '#ff4d6d', question: '#4d9dff', check: '#3ccf6e', spark: '#ffd34d', dots: '#ffffff', zz: '#ffffff', exhausted: '#ff9a3c', deny: '#ff4d6d', swap: '#4dd0c8', unverified: '#ffb35c' }[icon] || '#ffffff';
   const bob = Math.round(Math.sin(t / 250) * 1);
   const X = Math.round(bx), Y = Math.round(by - h + bob);
   x.fillStyle = '#1b1a2b'; x.fillRect(X - 1, Y - 1, w + 2, h + 2); x.fillRect(X + 1, Y + h + 1, 2, 1);
   x.fillStyle = col; x.fillRect(X, Y, w, h); x.fillRect(X + 1, Y + h, 2, 1);
   const fg = icon === 'dots' ? '#1b1a2b' : icon === 'zz' ? '#7a52e0' : '#ffffff';
-  const txt = { alert: '!', question: '?', spark: '+', zz: 'ZZ', exhausted: '!!', deny: 'X', swap: '>' }[icon] ?? '';
+  const txt = { alert: '!', question: '?', spark: '+', zz: 'ZZ', exhausted: '!!', deny: 'X', swap: '>', unverified: '?' }[icon] ?? '';
   if (icon === 'check') { x.fillStyle = fg; x.fillRect(X + 2, Y + 4, 1, 1); x.fillRect(X + 3, Y + 5, 1, 1); x.fillRect(X + 4, Y + 4, 1, 1); x.fillRect(X + 5, Y + 3, 1, 1); x.fillRect(X + 6, Y + 2, 1, 1); }
   else if (icon === 'dots') { const k = Math.floor(t / 250) % 4; for (let i = 0; i < 3; i++) if (i < k) { x.fillStyle = fg; x.fillRect(X + 2 + i * 3, Y + 4, 1, 1); } }
   else drawText(x, txt, X + w / 2, Y + 2, fg, { align: 'center' });

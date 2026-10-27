@@ -198,7 +198,9 @@ export class ArenaScene {
 
   drawHeader(x, run, now) {
     const title = (run.workflow ? `WORKFLOW ${run.workflow}` : `${run.project} FAN-OUT`).toUpperCase().slice(0, 34);
-    const meta = `${run.done + run.failed}/${run.total}  ${run.running}>  ${fmtUsd(run.cost)}  ${fmtDuration((run.endedAt || now) - run.startedAt)}`;
+    const f = run.forecast;
+    const fc = f && !run.endedAt && f.projectedCost ? `  EST ${fmtUsd(f.projectedCost)}${f.eta && f.eta > now ? ` ${fmtDuration(f.eta - now)} LEFT` : ''}` : '';
+    const meta = `${run.done + run.failed}/${run.total}  ${run.running}>  ${fmtUsd(run.cost)}${fc}  ${fmtDuration((run.endedAt || now) - run.startedAt)}`;
     x.fillStyle = 'rgba(15,12,30,0.75)'; x.fillRect(0, 0, this.W, 11);
     drawText(x, title, 4, 3, C.gold);
     drawText(x, meta.toUpperCase(), this.W - 4, 3, '#cfcaf5', { align: 'right' });

@@ -41,6 +41,13 @@ Adapters translate provider payloads into these events, and everything downstrea
 | `team` | `{ action: assign / report / task.created / task.completed, team, teammate, subject }` |
 | `agent.meta` | Late facts about an agent: `{ stage, workflow, title, parentId }` |
 | `notice` | Informational log line: `{ text, level }` |
+| `git` | A commit / push / PR seen outside an agent (the git hook): `{ action: commit / push / pr.open / pr.merge, sha, cwd }`. Use `agentId: "git"`. |
+
+Optional fields that feed the daily tools:
+
+- `turn.end` / `subagent.end` / `team` (report) may carry `claims: true` when the agent's final message says tests or the build pass. Swarmstead then checks that a test command passed after the agent's last edit (`unverified`).
+- `tool.end` with `category: "run"` and a `command` such as `git commit`, `gh pr create` or `gh pr merge` is booked in the Ledger.
+- `tool.end` with `denied: true` counts as a denied tool call.
 
 Any event may also carry `mode` (permission mode), `effort`, `stage`, `workflow`, `background` and `crons`. These are copied onto the agent. On `subagent.end`, `outcome` overrides the computed one (`clean`, `rough`, `failed`, `lost`).
 

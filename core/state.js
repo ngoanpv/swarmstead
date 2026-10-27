@@ -3,9 +3,9 @@
 // renderer should animate (coins flying, a scroll being handed off, a monster
 // appearing). snapshot() returns plain JSON for the renderer / the wire.
 
-import { EV, CATEGORY, categorize, isTestCommand, EXHAUSTION, AGENT_FIELDS } from './schema.js';
+import { EV, CATEGORY, categorize, isTestCommand, gitAction, EXHAUSTION, AGENT_FIELDS } from './schema.js';
 import { priceUsage } from './pricing.js';
-import { projectName, errorSignature, worktreeOf, median } from './util.js';
+import { projectName, errorSignature, worktreeOf, median, shortPath } from './util.js';
 
 const RING = 12;
 const BURN_BUCKET_MS = 10_000;
@@ -50,12 +50,14 @@ export const BUSY = new Set([
 
 /** How a subagent's work came back to its orchestrator. */
 export const OUTCOME = Object.freeze({ CLEAN: 'clean', ROUGH: 'rough', FAILED: 'failed', LOST: 'lost' });
+const MERGE_WINDOW_MS = 24 * 3600_000; // two worktrees touching one file within a day = merge risk
 
 function newTurn(ts) {
   return {
     startedAt: ts, cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
     tools: 0, edits: 0, runs: 0, failedRuns: 0, testFails: 0, testFixes: 0,
     loops: 0, errorEchoes: 0, returns: 0, permissions: 0, compactions: 0, denied: 0,
+    lastEditTs: 0, lastTestTs: 0, lastTestOkTs: 0, testRuns: 0, commits: 0, unverified: false,
     cat: { read: 0, write: 0, run: 0, web: 0, delegate: 0, plan: 0, tool: 0 },
   };
 }
@@ -80,8 +82,12 @@ export class World {
     this.limits = {};             // provider -> latest rate-limit snapshot
     this.runs = new Map();        // runId -> fan-out run (subagent swarm / workflow)
     this.teams = new Map();       // team name -> { lead, members:Set, open, done }
+    this.ledger = new Map();      // project -> today's shipping ledger (cost per commit / PR)
+    this.treeEdits = new Map();   // `${repoRoot}|${relPath}` -> Map(tree -> {agentId, ts})
     this.dayStart = 0;
     this.runSeq = 0;
+    this.pastBlocks = [];         // costs of finished 5-hour blocks (seeded from disk by the daemon)
+    this.forecasts = { runs: {}, block: null, limits: {} };
     this.rollDay(now);
   }
 
@@ -161,7 +167,11 @@ export class World {
       return fx;
     }
     if (ev.kind === EV.LIMITS) {
-      this.limits[ev.provider || 'claude'] = { ...ev.limits, ts };
+      this.limits[ev.provider || 'claude'] = { ...ev.limits, ts, history: [...(this.limits[ev.provider || 'claude']?.history || []), [ts, ev.limits?.primary?.usedPercent]].filter((h) => h[1] != null).slice(-60) };
+      return fx;
+    }
+    if (ev.kind === EV.GIT) {
+      this.ship(projectName(ev.cwd || ''), ev.action, ts, fx, null, { sha: ev.sha, human: true });
       return fx;
     }
     this.lastTs = Math.max(this.lastTs, ts);
@@ -225,6 +235,15 @@ export class World {
           fx.push({ fx: 'bubble', agentId: a.id, icon: 'deny' });
           this.log(ts, a.id, `${ev.tool || 'tool'} was denied`, 'warn');
         }
+        if (category === CATEGORY.RUN && isTestCommand(cmd)) {
+          a.turn.testRuns++;
+          a.turn.lastTestTs = ts;
+          if (ev.ok !== false) a.turn.lastTestOkTs = ts;
+        }
+        if (category === CATEGORY.RUN && ev.ok !== false) {
+          const act = gitAction(cmd);
+          if (act) { if (act === 'commit') a.turn.commits++; this.ship(a.project, act, ts, fx, a); }
+        }
         if (ev.ok === false) {
           const sig = errorSignature(ev.error || `${ev.tool} failed`);
           a.recentErrors.push({ sig, ts, text: ev.error || '' });
@@ -241,6 +260,7 @@ export class World {
         } else {
           if (category === CATEGORY.WRITE) {
             a.turn.edits++;
+            a.turn.lastEditTs = ts;
             a.lastWriteTs = ts; a.toolsSinceWrite = 0; a.costSinceWrite = 0;
             if (ev.file) this.touchFile(a, ev.file, ts, fx);
           }
@@ -272,6 +292,7 @@ export class World {
       case EV.TURN_END: {
         a.turns++;
         a.permissionSince = 0;
+        this.verify(a, ev, ts, fx);
         const reason = ev.reason || '';
         const summary = this.closeTurn(a, ts, { failure: reason || null });
         if (EXHAUSTION.has(reason)) {
@@ -306,6 +327,7 @@ export class World {
         const parent = this.agents.get(a.parentId);
         if (a.alive) {
           a.turns++;
+          this.verify(a, ev, ts, fx);
           const outcome = ev.outcome || this.outcomeOf(a, parent, ts, ev.reason);
           a.outcome = outcome;
           const run = a.runId ? this.runs.get(a.runId) : null;
@@ -377,6 +399,7 @@ export class World {
           this.setStatus(a, STATUS.THINKING, ts);
         }
         if (ev.action === 'report') {
+          this.verify(a, ev, ts, fx);
           const lead = this.agents.get(a.parentId);
           const outcome = this.outcomeOf(a, lead, ts, ev.reason);
           const summary = this.closeTurn(a, ts, { outcome });
@@ -409,7 +432,7 @@ export class World {
     if (reason || a.monsters.length || a.exhausted) return OUTCOME.FAILED;
     if (parent && (parent.status === STATUS.COMPACTING || ts - parent.lastCompactTs < 60_000)) return OUTCOME.LOST;
     const t = a.turn;
-    if (t.loops || t.errorEchoes || t.failedRuns > t.testFixes || t.denied) return OUTCOME.ROUGH;
+    if (t.loops || t.errorEchoes || t.failedRuns > t.testFixes || t.denied || t.unverified) return OUTCOME.ROUGH;
     return OUTCOME.CLEAN;
   }
 
@@ -421,7 +444,7 @@ export class World {
       run = {
         id: `run${++this.runSeq}`, parentId: parent.id, project: parent.project, workflow: wf,
         startedAt: ts, endedAt: 0, lastActivity: ts, total: 0, running: 0, done: 0, failed: 0, cost: 0,
-        outcomes: { clean: 0, rough: 0, failed: 0, lost: 0 }, stages: [], timeline: [],
+        outcomes: { clean: 0, rough: 0, failed: 0, lost: 0 }, stages: [], timeline: [], finishedCost: 0,
       };
       this.runs.set(run.id, run);
       parent.runId = run.id;
@@ -446,7 +469,7 @@ export class World {
     run.lastActivity = ts;
     if (outcome === OUTCOME.FAILED) run.failed++; else run.done++;
     run.outcomes[outcome] = (run.outcomes[outcome] || 0) + 1;
-    run.cost += a.cost;
+    run.finishedCost += a.cost;
     if (st) {
       st.running = Math.max(0, st.running - 1);
       if (outcome === OUTCOME.FAILED) st.failed++; else st.done++;
@@ -460,6 +483,44 @@ export class World {
     // Fan-in is decided in tickRuns after a short quiet period: workflow pipelines
     // hit running === 0 for a moment between stages, and that is not the end.
     if (run.running === 0) run.quietSince = ts;
+  }
+
+  /**
+   * "All tests pass!" — did they actually run after the last edit?
+   * ev.claims comes from the adapter (a boolean read from the final message).
+   */
+  verify(a, ev, ts, fx) {
+    if (!ev.claims) return;
+    const t = a.turn;
+    const ranAfterEdit = t.lastTestOkTs && t.lastTestOkTs >= t.lastEditTs;
+    if (ranAfterEdit) return;
+    t.unverified = true;
+    const why = t.testRuns === 0 ? 'none' : t.lastTestOkTs ? 'stale' : 'failing';
+    fx.push({ fx: 'unverified', agentId: a.id, why, ts });
+    this.log(ts, a.id, `claims tests pass, but ${why === 'none' ? 'no test ran this turn' : why === 'stale' ? 'files changed after the last passing run' : 'the last test run failed'}`, 'warn');
+  }
+
+  /** Shipping ledger: cost per commit / PR, per project, for today. */
+  ship(project, action, ts, fx, a, extra = {}) {
+    const L = this.ledgerOf(project);
+    if (action === 'commit') {
+      // a git post-commit hook right after an agent's own `git commit` is the same commit
+      if (extra.human && L.commits.length && ts - L.commits[L.commits.length - 1].ts < 15_000 && !L.commits[L.commits.length - 1].human) { L.commits[L.commits.length - 1].sha = extra.sha; return; }
+      L.commits.push({ ts, cost: L.sinceCommit, agentId: a?.id || null, sha: extra.sha || null, human: !!extra.human });
+      if (L.commits.length > 500) L.commits.shift();
+      L.sinceCommit = 0;
+    }
+    if (action === 'push') L.pushes++;
+    if (action === 'pr.open') { L.prs.push({ ts, cost: L.sincePr, agentId: a?.id || null }); L.sincePr = 0; }
+    if (action === 'pr.merge') L.merged++;
+    fx.push({ fx: 'ship', agentId: a?.id || null, project, action, cost: action === 'commit' ? L.commits[L.commits.length - 1]?.cost : action === 'pr.open' ? L.prs[L.prs.length - 1]?.cost : 0 });
+    this.log(ts, a?.id || null, `${project}: ${action === 'commit' ? 'commit' : action === 'push' ? 'push' : action === 'pr.open' ? 'pull request opened' : 'pull request merged'}`, 'good');
+  }
+
+  ledgerOf(project) {
+    let L = this.ledger.get(project);
+    if (!L) { L = { project, cost: 0, sinceCommit: 0, sincePr: 0, commits: [], prs: [], pushes: 0, merged: 0 }; this.ledger.set(project, L); }
+    return L;
   }
 
   /** A late fact (workflow journal) says this agent belongs to another stage. */
@@ -504,7 +565,10 @@ export class World {
       t.cost += cost; t.input += input; t.output += output; t.cacheRead += cr; t.cacheWrite += cw;
     }
     a.thinking += u.thinking || 0;
+    if (a.runId) { const run = this.runs.get(a.runId); if (run) run.cost += cost; } // live run cost, incl. agents still working
     a.costSinceWrite += cost;
+    const L = this.ledgerOf(a.project);
+    L.cost += cost; L.sinceCommit += cost; L.sincePr += cost;
     // Context size = everything the model had to read for this response.
     if (!ev.context && (input + cr + cw) > 0 && !u.noContext) {
       a.context.used = input + cr + cw;
@@ -536,6 +600,7 @@ export class World {
     if (start > this.dayStart) {
       this.dayStart = start;
       this.totals = { cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, byModel: {} };
+      if (this.ledger) this.ledger.clear();
     }
   }
 
@@ -566,7 +631,33 @@ export class World {
     fx.push({ fx: 'handoff', ...h });
   }
 
+  /** Same file, different worktrees (or worktree vs main checkout) = a merge conflict waiting to happen. */
+  mergeRisk(a, file, ts, fx) {
+    const wt = worktreeOf(file);
+    let root, tree, rel;
+    if (wt) {
+      root = wt.root; tree = wt.name;
+      const base = file.slice(0, file.indexOf(wt.name) + wt.name.length);
+      rel = file.slice(base.length + 1);
+    } else {
+      root = worktreeOf(a.cwd)?.root || a.cwd;
+      if (!root || !file.startsWith(root + '/') && !file.startsWith(root + '\\')) return;
+      tree = 'main'; rel = file.slice(root.length + 1);
+    }
+    if (!rel) return;
+    const key = `${root}|${rel}`;
+    let trees = this.treeEdits.get(key);
+    if (!trees) { trees = new Map(); this.treeEdits.set(key, trees); }
+    trees.set(tree, { agentId: a.id, ts });
+    const others = [...trees].filter(([t, v]) => t !== tree && ts - v.ts < MERGE_WINDOW_MS);
+    if (others.length) {
+      fx.push({ fx: 'mergeRisk', agentId: a.id, other: others[0][1].agentId, file: rel, project: projectName(root), trees: [tree, ...others.map(([t]) => t)], ts });
+    }
+    if (this.treeEdits.size > 5000) this.treeEdits.delete(this.treeEdits.keys().next().value);
+  }
+
   touchFile(a, file, ts, fx) {
+    this.mergeRisk(a, file, ts, fx);
     let list = this.fileTouches.get(file);
     if (!list) { list = []; this.fileTouches.set(file, list); }
     const prev = list.filter((x) => x.agentId !== a.id && ts - x.ts < 10 * 60_000);
@@ -613,6 +704,7 @@ export class World {
 
   addBlock(ts, cost, tokens) {
     if (!this.block || ts >= this.block.end) {
+      if (this.block && this.block.cost > 0) { this.pastBlocks.push(this.block.cost); if (this.pastBlocks.length > 60) this.pastBlocks.shift(); }
       const start = Math.floor(ts / 3600_000) * 3600_000;
       this.block = { start, end: start + BLOCK_MS, cost: 0, tokens: 0 };
     }
@@ -643,7 +735,7 @@ export class World {
 
   runView(run, now) {
     return {
-      id: run.id, parentId: run.parentId, project: run.project, workflow: run.workflow,
+      id: run.id, parentId: run.parentId, project: run.project, workflow: run.workflow, forecast: this.forecasts.runs[run.id] || null,
       startedAt: run.startedAt, endedAt: run.endedAt, total: run.total, running: run.running,
       done: run.done, failed: run.failed, cost: run.cost, outcomes: { ...run.outcomes },
       stages: run.stages.map((s) => ({
@@ -674,15 +766,28 @@ export class World {
       .filter((r) => !r.endedAt || now - r.endedAt < 5 * 60_000)
       .map((r) => this.runView(r, now));
     const teams = [...this.teams.values()].map((t) => ({ name: t.name, lead: t.lead, members: [...t.members], open: t.open, done: t.done }));
+    const ledger = [...this.ledger.values()].filter((L) => L.cost > 0 || L.commits.length || L.prs.length).map((L) => {
+      const shipped = L.commits.filter((c) => c.cost > 0);
+      return {
+        project: L.project, cost: L.cost, commits: L.commits.length, pushes: L.pushes, prsOpened: L.prs.length, prsMerged: L.merged,
+        shippedCost: shipped.reduce((s, c) => s + c.cost, 0), shipped: shipped.length,
+        costPerCommit: shipped.length ? shipped.reduce((s, c) => s + c.cost, 0) / shipped.length : null,
+        costPerPr: L.prs.length ? L.prs.reduce((s, p) => s + p.cost, 0) / L.prs.length : null,
+        unshipped: L.sinceCommit, lastCommitTs: L.commits.length ? L.commits[L.commits.length - 1].ts : 0,
+        recent: L.commits.slice(-6).map((c) => ({ ts: c.ts, cost: c.cost, sha: c.sha ? String(c.sha).slice(0, 7) : null, human: c.human })),
+      };
+    }).sort((p, q) => q.cost - p.cost);
     return {
       now,
       agents,
       runs,
       teams,
+      ledger,
       totals: { ...this.totals, byModel: { ...this.totals.byModel } },
       burnRate: this.burnRate(now, 5),
       burn: [...this.burn],
-      block: this.block ? { ...this.block } : null,
+      block: this.block ? { ...this.block, forecast: this.forecasts.block } : null,
+      limitForecasts: this.forecasts.limits,
       limits: JSON.parse(JSON.stringify(this.limits)),
       dayStart: this.dayStart,
       handoffs: this.handoffs.slice(-30),

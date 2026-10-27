@@ -9,7 +9,7 @@
 //    subagent is linked to it (nested delegation), not flattened to the session.
 //  - Hook payloads carry no token usage; that comes from the transcript tailer.
 
-import { EV } from '../../core/schema.js';
+import { EV, claimsPassing } from '../../core/schema.js';
 import { oneLine } from '../../core/util.js';
 import { summarizeTool, responseFailed } from './summarize.js';
 
@@ -128,7 +128,7 @@ export class ClaudeHookAdapter {
         return [ev(EV.NOTICE, { text: 'MCP input answered' })];
 
       case 'Stop':
-        return [ev(EV.TURN_END, { background: count(p.background_tasks), crons: count(p.session_crons) })];
+        return [ev(EV.TURN_END, { background: count(p.background_tasks), crons: count(p.session_crons), claims: claimsPassing(p.last_assistant_message) || undefined })];
       case 'StopFailure':
         return [ev(EV.TURN_END, { reason: String(p.error || 'error') })];
 
@@ -149,8 +149,9 @@ export class ClaudeHookAdapter {
       case 'SubagentStop': {
         const m = String(p.agent_transcript_path || '').match(/subagents[\\/]workflows[\\/](wf_[^\\/]+)/);
         if (m) this.runOf.set(agentId, m[1]);
-        if (this.teammates.has(agentId)) return [ev(EV.TEAM, { action: 'report' })];
-        return [ev(EV.SUBAGENT_END, { background: count(p.background_tasks) })];
+        const claims = claimsPassing(p.last_assistant_message) || undefined;
+        if (this.teammates.has(agentId)) return [ev(EV.TEAM, { action: 'report', claims })];
+        return [ev(EV.SUBAGENT_END, { background: count(p.background_tasks), claims })];
       }
 
       case 'TeammateIdle':

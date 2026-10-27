@@ -70,6 +70,17 @@ export class Detectors {
           this.raise(out, key, 'compactRisk', 'warn', a.id, now, { who: labelOf(a), kids: busyKids.length });
         }
       }
+      if (f.fx === 'unverified') {
+        const a = world.agents.get(f.agentId);
+        const key = `unverified:${f.agentId}:${f.ts}`;
+        this.sticky.set(key, now + 10 * 60_000);
+        this.raise(out, key, 'unverified', 'warn', f.agentId, now, { who: labelOf(a), why: f.why });
+      }
+      if (f.fx === 'mergeRisk') {
+        const key = `mergeRisk:${f.project}|${f.file}`;
+        this.sticky.set(key, now + 30 * 60_000);
+        this.raise(out, key, 'mergeRisk', 'warn', f.agentId, now, { file: f.file, project: f.project, trees: f.trees, other: f.other });
+      }
       if (f.fx === 'handoff' && f.kind === 'delegate') {
         this.spawns.push({ parent: f.from, ts: now });
         if (this.spawns.length > 2000) this.spawns.splice(0, 1000);
@@ -167,6 +178,34 @@ export class Detectors {
       }
       if (t.runBudgetUsd > 0 && run.cost >= t.runBudgetUsd) {
         add(`runBudget:${run.id}`, 'runBudget', 'crit', parent, { who: labelOf(parent), spent: run.cost, budget: t.runBudgetUsd });
+      }
+    }
+
+    // 10b. Forecasts: a run heading over its budget, a block or provider limit running out early.
+    const F = world.forecasts || {};
+    for (const run of world.runs.values()) {
+      const f = F.runs?.[run.id];
+      if (!f || run.endedAt) continue;
+      const parent = world.agents.get(run.parentId);
+      if (t.runBudgetUsd > 0 && f.projectedCost >= t.runBudgetUsd && run.cost < t.runBudgetUsd) {
+        add(`runForecast:${run.id}`, 'runForecast', 'warn', parent, { who: labelOf(parent), projected: f.projectedCost, budget: t.runBudgetUsd, basis: f.basis, samples: f.samples || 0 });
+      } else if (f.basis === 'history' && run.cost > f.expectedCost * 1.5 && run.cost > 0.5) {
+        add(`runOverrun:${run.id}`, 'runOverrun', 'warn', parent, { who: labelOf(parent), spent: run.cost, usual: f.expectedCost, samples: f.samples });
+      }
+    }
+    const bf = F.block;
+    if (bf && (bf.hitsBeforeReset || bf.aboveUsual)) {
+      add('blockForecast', 'blockForecast', bf.hitsBeforeReset ? 'warn' : 'info', null, {
+        projected: bf.projectedEnd, ceiling: bf.ceiling, heaviest: bf.heaviest,
+        minutes: bf.eta ? Math.max(1, Math.round((bf.eta - now) / 60_000)) : null, resetMin: Math.round((bf.resetsAt - now) / 60_000),
+      });
+    }
+    for (const [prov, lf] of Object.entries(F.limits || {})) {
+      if (lf.eta && lf.hitsBeforeReset && lf.eta - now < 3 * 3600_000) {
+        add(`limitForecast:${prov}`, 'limitForecast', lf.eta - now < 30 * 60_000 ? 'crit' : 'warn', null, {
+          provider: prov, used: Math.round(lf.used), minutes: Math.max(1, Math.round((lf.eta - now) / 60_000)),
+          resetMin: lf.resetsAt ? Math.round((lf.resetsAt - now) / 60_000) : null,
+        });
       }
     }
 

@@ -44,6 +44,7 @@ export const EV = Object.freeze({
   TEAM: 'team',                     // { action: 'task.created'|'task.completed'|'join', team, teammate, subject }
   NOTICE: 'notice',                 // { text, level } — informational, e.g. quota auto-resume
   AGENT_META: 'agent.meta',         // late facts about an agent: { stage, workflow, title, parentId }
+  GIT: 'git',                       // { action: 'commit'|'push'|'pr.open'|'pr.merge', cwd, sha? } (from a git hook)
 });
 
 /** StopFailure error values that mean "the agent can't continue right now". */
@@ -100,6 +101,31 @@ export const TEST_COMMAND = /\b(test|tests|pytest|jest|vitest|mocha|go test|carg
 
 export function isTestCommand(cmd) {
   return !!cmd && TEST_COMMAND.test(cmd);
+}
+
+/** Shipping commands we can see agents run. Their cost becomes "cost per commit / PR". */
+export function gitAction(cmd) {
+  if (!cmd) return null;
+  const c = String(cmd);
+  if (/\bgh\s+pr\s+merge\b/.test(c)) return 'pr.merge';
+  if (/\bgh\s+pr\s+create\b/.test(c)) return 'pr.open';
+  if (/\bgit\s+(-C\s+\S+\s+)?commit\b/.test(c) && !/--dry-run/.test(c)) return 'commit';
+  if (/\bgit\s+(-C\s+\S+\s+)?push\b/.test(c)) return 'push';
+  return null;
+}
+
+/**
+ * Does the agent's final message claim tests/builds pass? We only keep the
+ * boolean — the message itself is never stored.
+ */
+const PASS_CLAIM = /\b(all\s+)?(\d+\s+)?(tests?|specs?|test suite|build|lint(ing)?|type[- ]?checks?|ci)\b[^.\n]{0,40}?\b(pass(es|ed|ing)?|green|succeed(s|ed)?|clean|ok)\b|✅\s*(tests?|build)/i;
+const NEGATED = /\b(fail(s|ed|ing)?|error|not\s+pass|didn'?t|did not|couldn'?t|unable|cannot|can'?t|skipp?ed|still\s+red)\b/i;
+export function claimsPassing(text) {
+  if (!text) return false;
+  for (const sentence of String(text).slice(0, 4000).split(/(?<=[.!?\n])\s+/)) {
+    if (PASS_CLAIM.test(sentence) && !NEGATED.test(sentence)) return true;
+  }
+  return false;
 }
 
 /** Valid kinds, for input validation on the daemon side. */

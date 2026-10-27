@@ -6,10 +6,15 @@ import { World } from './state.js';
 import { Detectors } from './detectors.js';
 import { Evolution, describe } from './evolution.js';
 import { isValidEvent } from './schema.js';
+import { forecastRun, forecastBlock, forecastLimit, summarizeRun } from './forecast.js';
 
 export class Village {
-  constructor({ roster = null, thresholds = {}, xpMultiplier = 1, now = Date.now() } = {}) {
+  constructor({ roster = null, thresholds = {}, xpMultiplier = 1, now = Date.now(), history = [], pastBlocks = [], blockCeilingUsd = 0, onRunEnd = null } = {}) {
     this.world = new World({ now });
+    this.history = [...history];          // finished runs, oldest first
+    this.world.pastBlocks = [...pastBlocks];
+    this.blockCeilingUsd = blockCeilingUsd;
+    this.onRunEnd = onRunEnd;
     this.detectors = new Detectors(thresholds);
     this.evolution = new Evolution(roster, { xpMultiplier });
     this.rosterDirty = false;
@@ -34,6 +39,17 @@ export class Village {
         out.push(...this.evolution.onTurn(f.summary, now, f.agentId));
         this.rosterDirty = true;
       }
+      if (f.fx === 'run.start') this.forecast(now, f.runId, out);
+      if (f.fx === 'run.end') {
+        const run = this.world.runs.get(f.runId);
+        if (run && run.total >= 2) {
+          const parent = this.world.agents.get(run.parentId);
+          const rec = summarizeRun(run, parent?.type || 'main');
+          this.history.push(rec);
+          if (this.history.length > 500) this.history.shift();
+          this.onRunEnd?.(rec);
+        }
+      }
       if (f.fx === 'fanin') {
         const parent = this.world.agents.get(f.agentId);
         if (parent && f.total >= 2) {
@@ -47,8 +63,27 @@ export class Village {
     return out;
   }
 
+  /** Refresh every forecast; on run start, announce what similar runs cost. */
+  forecast(now, newRunId = null, out = null) {
+    const w = this.world;
+    for (const run of w.runs.values()) {
+      if (run.endedAt && w.forecasts.runs[run.id]) continue;
+      const f = forecastRun(run, this.history, now);
+      w.forecasts.runs[run.id] = f;
+      if (run.id === newRunId && out && f.basis === 'history') out.push({ fx: 'forecast', runId: run.id, agentId: run.parentId, ...f, workflow: run.workflow });
+    }
+    for (const id of Object.keys(w.forecasts.runs)) if (!w.runs.has(id)) delete w.forecasts.runs[id];
+    w.forecasts.block = forecastBlock(w.block, now, { ceiling: this.blockCeilingUsd || null, pastBlocks: w.pastBlocks });
+    w.forecasts.limits = {};
+    for (const [prov, lim] of Object.entries(w.limits)) {
+      const lf = forecastLimit(lim, now);
+      if (lf) w.forecasts.limits[prov] = lf;
+    }
+  }
+
   tick(now = Date.now()) {
     const fx = [];
+    this.forecast(now);
     this.world.tickRuns(now, fx);
     const out = fx.length ? this.process(fx, now) : this.detectors.evaluate(this.world, now);
     this.world.gc(now);

@@ -5,7 +5,7 @@ Thanks for wanting to make the village better! 🏘
 ## Setup
 
 ```bash
-git clone https://github.com/your-org/swarmstead && cd swarmstead
+git clone https://github.com/ngoanpv/swarmstead && cd swarmstead
 npm test                                   # node:test, no dependencies
 node bin/swarmstead.js start --open     # live village
 open http://127.0.0.1:4317/web/?demo       # demo; add &hour=22 for night, &lang=vi
@@ -38,3 +38,15 @@ The list of hook events lives in `server/adapters/claude-hooks.js` (`CLAUDE_HOOK
 - Keep PRs focused, add or adjust tests, and run `npm test`.
 - For visual changes, include a screenshot or GIF (the demo mode makes this easy).
 - Be kind. We follow the [Contributor Covenant](https://www.contributor-covenant.org/version/2/1/code_of_conduct/).
+
+## Re-recording the README GIFs
+
+The GIFs in `docs/images/*.gif` and `docs/media/swarmstead-tour.mp4` come from the demo, recorded with Playwright:
+
+```bash
+node bin/swarmstead.js start &
+pip install playwright && playwright install chromium   # once
+python3 scripts/tour/record.py && scripts/tour/cut.sh
+cp .tour/gifs/*.gif docs/images/ && cp .tour/gifs/swarmstead-tour.mp4 docs/media/
+```
+

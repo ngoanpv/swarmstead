@@ -6,11 +6,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { CLAUDE_HOOK_EVENTS } from './adapters/claude-hooks.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const HOOK_SCRIPT = path.join(ROOT, 'plugin', 'hooks', 'swarmstead-hook.mjs');
+export const GATE_SCRIPT = path.join(ROOT, 'plugin', 'hooks', 'swarmstead-gate.mjs');
+export const GIT_SCRIPT = path.join(ROOT, 'plugin', 'hooks', 'swarmstead-git.mjs');
 export const HOOK_MARKER = 'swarmstead-hook.mjs';
+export const GATE_MARKER = 'swarmstead-gate.mjs';
+const MARKERS = [HOOK_MARKER, GATE_MARKER];
 
 const TOOL_EVENTS = new Set(['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'PermissionDenied']);
 export const CODEX_HOOK_EVENTS = [
@@ -20,6 +25,10 @@ export const CODEX_HOOK_EVENTS = [
 
 function hookCommand(provider) {
   return `"${process.execPath}" "${HOOK_SCRIPT}" ${provider}`;
+}
+
+function gateCommand() {
+  return `"${process.execPath}" "${GATE_SCRIPT}"`;
 }
 
 function readJsonFile(file) {
@@ -42,7 +51,7 @@ function stripOurs(hooks) {
   for (const [event, groups] of Object.entries(hooks || {})) {
     if (!Array.isArray(groups)) { out[event] = groups; continue; }
     const kept = groups
-      .map((g) => ({ ...g, hooks: (g.hooks || []).filter((h) => !String(h.command || '').includes(HOOK_MARKER)) }))
+      .map((g) => ({ ...g, hooks: (g.hooks || []).filter((h) => !MARKERS.some((m) => String(h.command || '').includes(m))) }))
       .filter((g) => g.hooks.length > 0);
     if (kept.length) out[event] = kept;
   }
@@ -66,12 +75,47 @@ export function claudeSettingsPath(scope = 'user', cwd = process.cwd()) {
     : path.join(os.homedir(), '.claude', 'settings.json');
 }
 
-export function installClaude({ scope = 'user', cwd } = {}) {
+/**
+ * gate: also add the OPT-IN synchronous hooks — remote approvals (PermissionRequest)
+ * and the budget brake (PreToolUse on Agent/Task/Workflow). They fail open.
+ */
+export function installClaude({ scope = 'user', cwd, gate = false, waitSec = 120 } = {}) {
   const file = claudeSettingsPath(scope, cwd);
   const settings = readJsonFile(file);
   settings.hooks = addOurs(settings.hooks, CLAUDE_HOOK_EVENTS, 'claude');
+  if (gate) {
+    const h = settings.hooks;
+    h.PermissionRequest = [...(h.PermissionRequest || []), { matcher: '*', hooks: [{ type: 'command', command: gateCommand(), timeout: Math.max(30, waitSec + 15) }] }];
+    h.PreToolUse = [...(h.PreToolUse || []), { matcher: 'Agent|Task|Workflow', hooks: [{ type: 'command', command: gateCommand(), timeout: 5 }] }];
+  }
   backupAndWrite(file, settings);
-  return { file, events: CLAUDE_HOOK_EVENTS.length };
+  return { file, events: CLAUDE_HOOK_EVENTS.length, gate };
+}
+
+/** Add a post-commit hook to the git repo at cwd (keeps any existing hook). */
+export function installGit({ cwd = process.cwd() } = {}) {
+  let hooksDir;
+  try {
+    hooksDir = execFileSync('git', ['rev-parse', '--git-path', 'hooks'], { cwd, encoding: 'utf8' }).trim();
+  } catch { throw new Error('Not inside a git repository.'); }
+  hooksDir = path.resolve(cwd, hooksDir);
+  fs.mkdirSync(hooksDir, { recursive: true });
+  const file = path.join(hooksDir, 'post-commit');
+  const line = `"${process.execPath}" "${GIT_SCRIPT}" commit >/dev/null 2>&1 || true # swarmstead`;
+  let text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '#!/bin/sh\n';
+  if (!text.includes('# swarmstead')) text = text.replace(/\s*$/, '\n') + line + '\n';
+  fs.writeFileSync(file, text, { mode: 0o755 });
+  return { file };
+}
+
+export function uninstallGit({ cwd = process.cwd() } = {}) {
+  let hooksDir;
+  try { hooksDir = path.resolve(cwd, execFileSync('git', ['rev-parse', '--git-path', 'hooks'], { cwd, encoding: 'utf8' }).trim()); } catch { return { removed: false }; }
+  const file = path.join(hooksDir, 'post-commit');
+  if (!fs.existsSync(file)) return { file, removed: false };
+  const text = fs.readFileSync(file, 'utf8').split('\n').filter((l) => !l.includes('# swarmstead')).join('\n');
+  fs.writeFileSync(file, text);
+  return { file, removed: true };
 }
 
 export function uninstallClaude({ scope = 'user', cwd } = {}) {
@@ -109,5 +153,11 @@ export function claudeInstalled(scope = 'user') {
   try {
     const s = readJsonFile(claudeSettingsPath(scope));
     return JSON.stringify(s.hooks || {}).includes(HOOK_MARKER);
+  } catch { return false; }
+}
+
+export function gateInstalled(scope = 'user') {
+  try {
+    return JSON.stringify(readJsonFile(claudeSettingsPath(scope)).hooks || {}).includes(GATE_MARKER);
   } catch { return false; }
 }

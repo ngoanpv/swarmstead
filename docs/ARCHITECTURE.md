@@ -2,31 +2,37 @@
 
 ```
 swarmstead/
-├─ bin/swarmstead.js        CLI: start, install/uninstall, doctor, ping
+├─ bin/swarmstead.js        CLI: start [--lan], install claude [--gate] / git / codex, uninstall, doctor, ping
 ├─ core/                       isomorphic ES modules (daemon + browser)
 │  ├─ schema.js                normalized event kinds, tool categories
 │  ├─ state.js                 World: reducer over events → agents, totals, handoffs, effects
 │  ├─ detectors.js             issue rules → alerts (with i18n params)
 │  ├─ evolution.js             familiars, XP, stats, stages
 │  ├─ engine.js                Village = World + Detectors + Evolution
+│  ├─ forecast.js              run / 5-hour block / provider-limit forecasts
+│  ├─ postmortem.js            replay an event log → where the money went, waste, Markdown
 │  ├─ pricing.js               per-model price table (overridable)
 │  ├─ i18n.js                  en + vi strings, alert texts and hints
 │  └─ util.js
 ├─ server/
 │  ├─ daemon.js                HTTP + SSE, reorder buffer, persistence
-│  ├─ install.js               safe settings.json / hooks.json editing
+│  ├─ approvals.js             pending permission prompts, decisions (allow / allow-session / deny)
+│  ├─ notify.js                desktop / ntfy (with Approve/Deny actions) / webhook pushes
+│  ├─ install.js               safe settings.json / hooks.json / git post-commit editing
 │  ├─ config.js
 │  └─ adapters/
 │     ├─ claude-hooks.js       hook payload → events (also used for Codex)
 │     ├─ transcripts.js        Claude transcript + Codex rollout tailers
 │     └─ summarize.js          privacy-safe tool summaries
 ├─ plugin/                     Claude Code plugin (hooks/hooks.json + forwarder)
+│  └─ hooks/                   swarmstead-hook.mjs (async), swarmstead-gate.mjs (opt-in, sync), swarmstead-git.mjs
 ├─ .claude-plugin/marketplace.json
 ├─ web/                        the pixel village (no build step)
-│  ├─ index.html, main.js, sound.js
+│  ├─ index.html, main.js, sound.js, replay.js
 │  ├─ render/ sprites.js, scene.js (room), arena.js (big runs), world.js, pixelfont.js
 │  └─ sim/demo.js              scripted demo using the real engine
-└─ test/                       node:test suites (core, adapters, end-to-end daemon)
+├─ scripts/                    build-demo.js, gen-plugin-hooks.js, tour/ (README GIF recorder)
+└─ test/                       node:test suites (core, adapters, swarm, features, end-to-end daemon)
 ```
 
 ## Data flow
@@ -37,7 +43,8 @@ swarmstead/
 4. **Reorder buffer**: async hooks can arrive slightly out of order, so events wait 300 ms and are applied sorted by timestamp.
 5. **Engine**: `World.apply` mutates state and returns *effects*. Detectors turn state and effects into alerts. Finished turns go to Evolution. A 1 s tick re-evaluates time-based rules (permission waits, stalls, burn rate).
 6. **Broadcast**: effects are sent immediately over SSE. Snapshots are throttled to 2.5/s, and the roster is sent and saved every 2 s when it changes.
-7. **Browser**: `WorldView` maps each agent's status to a place in the room. A new activity must persist 550 ms before the villager walks there, so a burst of tool calls doesn't make it jitter. Effects become animations.
+7. **Persistence**: finished runs append to `~/.swarmstead/runs.jsonl` (forecast history), finished 5-hour blocks to `blocks.json`, and every event to `events/<local-day>.jsonl` (replay).
+8. **Browser**: `WorldView` maps each agent's status to a place in the room. A new activity must persist 550 ms before the villager walks there, so a burst of tool calls doesn't make it jitter. Effects become animations.
 
 ## Status → place
 
@@ -65,3 +72,13 @@ swarmstead/
 - **Polling, not fs.watch**, for transcripts. It's portable, survives file rotation, and costs almost nothing for a few dozen files.
 - **Procedural sprites.** No asset licences to worry about, every familiar is unique, and evolution is easy to express in code.
 - **Same engine in browser and daemon.** The demo exercises the real logic, and contributors can work on visuals without running an agent.
+
+## The gate (opt-in, synchronous)
+
+`swarmstead install claude --gate` adds two synchronous hooks that run `plugin/hooks/swarmstead-gate.mjs`:
+
+- **PermissionRequest** → `POST /api/gate/permission`. The daemon holds the request only when someone can answer (a village tab is open, or a push channel is configured), for at most `gate.waitSubSec` (subagents) or `gate.waitMainSec` (main session). An answer becomes `{ hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior, updatedPermissions?, message? } } }`. "Allow for session" echoes Claude Code's own `permission_suggestions` with `destination: "session"`.
+- **PreToolUse** on `Agent|Task|Workflow` → `POST /api/gate/pretool`. With `gate.brakes` on, it returns a `permissionDecision: "deny"` with a reason once `dailyBudgetUsd` or `runBudgetUsd` is reached.
+
+Both fail open: no daemon, a timeout or a bad response prints nothing, and Claude Code behaves as if the hook were not there. `POST /api/approvals/:id` needs the token from `~/.swarmstead/token`.
+

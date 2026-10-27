@@ -25,9 +25,18 @@ const WORKFLOW = [
 ];
 
 export class DemoSim {
-  constructor({ onFx, onSnapshot, onRoster, speed = 1 }) {
-    this.village = new Village({ xpMultiplier: 2, thresholds: { burnUsdPerMin: 2.5, permissionMs: 15_000, waitingMs: 60_000, stragglerMinMs: 25_000, sprawlTotal: 30 } });
-    this.onFx = onFx; this.onSnapshot = onSnapshot; this.onRoster = onRoster;
+  constructor({ onFx, onSnapshot, onRoster, onApprovals = () => {}, speed = 1 }) {
+    this.village = new Village({
+      xpMultiplier: 2,
+      thresholds: { burnUsdPerMin: 2.5, permissionMs: 15_000, waitingMs: 60_000, stragglerMinMs: 25_000, sprawlTotal: 30 },
+      history: seedHistory(),            // past audit-payments runs -> "usually $0.62"
+      pastBlocks: [96, 131, 118, 104],   // earlier 5-hour blocks
+      blockCeilingUsd: 150,              // "at this pace you hit $150 before the block resets"
+    });
+    this.onFx = onFx; this.onSnapshot = onSnapshot; this.onRoster = onRoster; this.onApprovals = onApprovals;
+    this.events = [];
+    this.pending = new Map();
+    this.recent = [];
     this.speed = speed;
     this.r = rng(42);
     this.ctx = new Map();
@@ -52,8 +61,51 @@ export class DemoSim {
   flush(fx) { if (fx.length) this.onFx(fx); }
 
   emit(ev) {
-    const fx = this.village.ingest({ v: 1, ts: Date.now(), ...ev });
+    const e = { v: 1, ts: Date.now(), ...ev };
+    this.events.push(e);
+    if (this.events.length > 30_000) this.events.splice(0, 5_000);
+    const fx = this.village.ingest(e);
     this.flush(fx);
+  }
+
+  /** The demo's event log, for Replay and the post-mortem. */
+  getEvents() { return this.events.slice(); }
+
+  // ------------------------------------------------------------- approvals (same shape as the daemon's)
+
+  approval(a, tool, detail, waitMs, label) {
+    const id = 'ap' + Math.floor(this.r() * 1e9).toString(36);
+    const wait = waitMs / this.speed;
+    this.emit({ ...this.base(a), kind: EV.PERMISSION, tool, detail });
+    return new Promise((resolve) => {
+      const view = { id, agentId: a.agentId, label, sub: !!a.parentId, tool, detail, created: Date.now(), expires: Date.now() + wait, canRemember: true };
+      const timer = setTimeout(() => this.settle(id, null), wait);
+      this.pending.set(id, { view, resolve, timer });
+      this.pushApprovals();
+    });
+  }
+
+  decide(id, d) { this.settle(id, d); }
+
+  settle(id, d) {
+    const p = this.pending.get(id);
+    if (!p) return;
+    clearTimeout(p.timer);
+    this.pending.delete(id);
+    this.recent.push({ ...p.view, decided: Date.now(), decision: d || 'none' });
+    if (this.recent.length > 8) this.recent.shift();
+    p.resolve(d);
+    this.pushApprovals();
+  }
+
+  pushApprovals() { this.onApprovals({ pending: [...this.pending.values()].map((p) => p.view), recent: this.recent.slice() }); }
+
+  /** Run a command that needed approval: allowed / timed out (= you answered in the terminal) / denied. */
+  async gated(a, tool, opts, decision) {
+    if (decision !== 'deny') return this.tool(a, tool, { ...opts, think: 100 });
+    const id = 't' + Math.floor(this.r() * 1e9).toString(36);
+    this.emit({ ...this.base(a), kind: EV.TOOL_END, tool, toolUseId: id, category: categorize(tool), command: opts.command, ok: false, denied: true, error: 'denied by user' });
+    await this.usage(a, 200);
   }
 
   sleep(ms) { return new Promise((r) => setTimeout(r, ms / this.speed)); }
@@ -120,8 +172,8 @@ export class DemoSim {
     await this.sleep(300);
     this.emit({ ...this.base(sub), kind: EV.SUBAGENT_START, detail });
     return (async () => {
-      await work(sub);
-      this.emit({ ...this.base(sub), kind: EV.SUBAGENT_END });
+      const extra = (await work(sub)) || {};
+      this.emit({ ...this.base(sub), kind: EV.SUBAGENT_END, ...extra });
       await this.usage(parent, 200);
       this.emit({ ...this.base(parent), kind: EV.TOOL_END, tool: 'Task', toolUseId: id, category: 'delegate', ok: true });
       this.ctx.set(parent.agentId, (this.ctx.get(parent.agentId) || 0) + 9000);
@@ -153,6 +205,7 @@ export class DemoSim {
       await this.edit(sub, 'src/checkout/cart.ts');
       await this.tool(sub, 'Bash', { command: 'npm test -- checkout', ms: 2400 });
       await this.sleep(800);
+      return { claims: true }; // "all checkout tests pass" — and it really ran them after the edit
     });
     if (this.leadRuns > 1 && this.leadRuns % 3 === 0) this.ctx.set(lead.agentId, 150_000);
     await this.tool(lead, 'WebSearch', { detail: 'stripe idempotency keys', ms: 1500 });
@@ -170,6 +223,9 @@ export class DemoSim {
       lead.model = 'claude-sonnet-5-5';
     } else lead.model = 'claude-opus-5-5';
     await this.tool(lead, 'Bash', { command: 'npm test', ms: 3000 });
+    await this.tool(lead, 'Bash', { command: 'git commit -am "checkout: apply coupons before tax"', ms: 700 });
+    if (this.leadRuns % 2 === 0) await this.tool(lead, 'Bash', { command: 'gh pr create --fill', ms: 1600 });
+    if (this.leadRuns % 4 === 0) await this.tool(lead, 'Bash', { command: 'gh pr merge --squash', ms: 1200 });
     await this.usage(lead, 900);
     this.emit({ ...this.base(lead), kind: EV.TURN_END, background: this.leadRuns % 2 ? 2 : 0 });
     this.emit({ ...this.base(lead), kind: EV.WAITING });
@@ -189,12 +245,20 @@ export class DemoSim {
       for (let i = 0; i < 5; i++) await this.tool(a, 'Grep', { detail: 'useCartStore', hash: 77777, ms: 500, think: 600 });
     }
     await this.edit(a, 'src/App.tsx', 2200);
-    await this.edit(a, 'src/components/Cart.tsx', 1800);
-    if (this.webRuns % 2 === 0) {
+    if (this.webRuns % 2 === 1) {
+      // A subagent that says "all tests pass" without having run a single test.
+      await this.delegate(a, 'refactorer', 'extract useCart hook', async (sub) => {
+        await this.read(sub, ['src/components/Cart.tsx']);
+        await this.edit(sub, 'src/hooks/useCart.ts', 1600);
+        await this.edit(sub, 'src/components/Cart.tsx', 1400);
+        await this.usage(sub, 800);
+        return { claims: true };
+      });
+    } else await this.edit(a, 'src/components/Cart.tsx', 1800);
+    if (this.webRuns % 2 === 1) {
       await this.usage(a, 200);
-      this.emit({ ...this.base(a), kind: EV.PERMISSION, tool: 'Bash', detail: 'npm install framer-motion' });
-      await this.sleep(22_000);
-      await this.tool(a, 'Bash', { command: 'npm install framer-motion', ms: 2500, think: 100 });
+      const d = await this.approval(a, 'Bash', 'npm install framer-motion', 22_000, 'web-app');
+      await this.gated(a, 'Bash', { command: 'npm install framer-motion', ms: 2500 }, d);
     }
     if (this.webRuns % 3 === 2) {
       // The plan ran out of headroom mid-turn.
@@ -207,6 +271,8 @@ export class DemoSim {
     await this.usage(a, 700);
     this.emit({ ...this.base(a), kind: EV.TURN_END });
     this.emit({ ...this.base(a), kind: EV.WAITING });
+    // you commit by hand; the git hook books the agent's spend against it
+    if (this.webRuns % 2 === 0) this.emit({ provider: 'git', agentId: 'git', sessionId: 'git', kind: EV.GIT, action: 'commit', sha: Math.floor(this.r() * 0xfffffff).toString(16).padStart(7, '0'), cwd: PROJECTS.web });
     await this.sleep(this.jitter(this.webRuns % 3 === 0 ? 65_000 : 12_000));
   }
 
@@ -214,11 +280,14 @@ export class DemoSim {
     const a = this.agent('docs-0b77', PROJECTS.docs, 'codex', 'gpt-6.1-sol');
     if (!this.docsStarted) { this.emit({ ...this.base(a), kind: EV.SESSION_START }); this.docsStarted = true; }
     this.emit({ ...this.base(a), kind: EV.PROMPT });
-    this.emit({ ...this.base(a), kind: EV.LIMITS, limits: { primary: { usedPercent: 18 + Math.floor(this.r() * 30), windowMinutes: 300, resetsAt: Date.now() + 2.4 * 3600_000 }, secondary: { usedPercent: 41, windowMinutes: 10080 } } });
+    this.docsRuns = (this.docsRuns || 0) + 1;
+    this.docsReset ??= Date.now() + 2.4 * 3600_000;
+    this.emit({ ...this.base(a), kind: EV.LIMITS, limits: { primary: { usedPercent: Math.min(99, 31 + this.docsRuns * 0.6), windowMinutes: 300, resetsAt: this.docsReset }, secondary: { usedPercent: 41, windowMinutes: 10080 } } });
     await this.tool(a, 'shell', { command: 'rg -n "deprecated" docs/', ms: 900 });
     await this.tool(a, 'read_file', { file: `${a.cwd}/docs/getting-started.md`, ms: 600 });
     await this.tool(a, 'apply_patch', { file: `${a.cwd}/docs/getting-started.md`, ms: 1400, think: 1500 });
     await this.tool(a, 'shell', { command: 'npm run build', ms: 2600 });
+    if (this.docsRuns % 3 === 0) await this.tool(a, 'shell', { command: 'git commit -am "docs: drop deprecated flags"', ms: 600 });
     await this.usage(a, 500);
     this.emit({ ...this.base(a), kind: EV.TURN_END });
     await this.sleep(this.jitter(15_000));
@@ -228,7 +297,7 @@ export class DemoSim {
     // A second Claude session opened on the same repo, editing the same file → collision.
     this.twinRuns = (this.twinRuns || 0) + 1;
     // odd runs: same working copy (collision!); even runs: its own worktree, sandboxed with bypass
-    const inTree = this.twinRuns % 2 === 0;
+    const inTree = this.twinRuns % 2 === 1;
     const a = this.agent('web-twin-55e', inTree ? `${PROJECTS.web}/.claude/worktrees/fix-cart` : PROJECTS.web, 'claude', 'claude-sonnet-5-5', null, null, inTree ? { mode: 'bypassPermissions' } : {});
     this.emit({ ...this.base(a), kind: EV.SESSION_START });
     this.emit({ ...this.base(a), kind: EV.PROMPT });
@@ -277,8 +346,8 @@ DemoSim.prototype.workflow = async function workflow() {
             : { file: `${sub.cwd}/src/ledger/part-${(i * 7 + k) % 23}.ts`, detail: kind === 'Grep' ? 'settle(' : '', ms: dur / steps * 0.6, hash: loopy ? 4242 : undefined };
           await this.tool(sub, loopy && k < 4 ? 'Grep' : kind, { ...opts, think: dur / steps * 0.3 });
           if (stuck && k === 0) {
-            this.emit({ ...this.base(sub), kind: EV.PERMISSION, tool: 'Bash', detail: 'psql -c "select …"' });
-            await this.sleep(30_000);
+            const d = await this.approval(sub, 'Bash', 'psql -c "select * from refunds"', 30_000, `investigator #${i + 1} · audit-payments`);
+            await this.gated(sub, 'Bash', { command: 'psql -c "select * from refunds"', ms: 900 }, d);
           }
         }
         if (loopy) for (let k = 0; k < 3; k++) await this.tool(sub, 'Grep', { detail: 'settle(', hash: 4242, ms: 300, think: 300 });
@@ -298,6 +367,15 @@ DemoSim.prototype.workflow = async function workflow() {
   this.emit({ ...this.base(lead), kind: EV.WAITING });
   await this.sleep(this.jitter(150_000));
 };
+
+/** Four earlier audit-payments runs, so the forecast has something to go on. */
+function seedHistory() {
+  const now = Date.now();
+  return [0.58, 0.66, 0.61, 0.71].map((cost, i) => ({
+    id: `past-${i}`, workflow: 'audit-payments', project: 'payments', parentType: 'main', total: 35, done: 34, failed: 1,
+    cost, durationMs: (3.6 + i * 0.3) * 60_000, endedAt: now - (4 - i) * 86400_000, stages: [],
+  }));
+}
 
 function shortName(f) { return f ? f.split('/').slice(-2).join('/') : ''; }
 
