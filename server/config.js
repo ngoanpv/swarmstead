@@ -2,13 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-export const HOME = process.env.AGENT_VILLAGE_HOME || path.join(os.homedir(), '.agent-village');
+export const HOME = process.env.SWARMSTEAD_HOME || path.join(os.homedir(), '.swarmstead');
 
 export const DEFAULT_CONFIG = {
   port: 4317,
   host: '127.0.0.1',
   capture: 'summary',      // 'summary' | 'minimal' — how much of a tool call is kept
-  logEvents: true,         // append normalized events to ~/.agent-village/events/*.jsonl
+  logEvents: true,         // append normalized events to ~/.swarmstead/events/*.jsonl
   desktopNotify: false,    // OS notification for critical alerts
   claude: { enabled: true, transcripts: path.join(os.homedir(), '.claude', 'projects') },
   codex: { enabled: true, sessions: path.join(os.homedir(), '.codex', 'sessions') },
@@ -28,7 +28,7 @@ export function loadConfig(overrides = {}) {
     thresholds: { ...(user.thresholds || {}) },
     pricing: { ...(user.pricing || {}) },
   };
-  if (process.env.AGENT_VILLAGE_PORT) cfg.port = Number(process.env.AGENT_VILLAGE_PORT);
+  if (process.env.SWARMSTEAD_PORT) cfg.port = Number(process.env.SWARMSTEAD_PORT);
   return cfg;
 }
 

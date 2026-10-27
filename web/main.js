@@ -1,7 +1,7 @@
-// Agent Village — browser entry point.
+// Swarmstead — browser entry point.
 // Live mode: subscribe to the local daemon (SSE). Demo mode: run the simulator in-page.
 
-import { WorldView } from './render/world.js';
+import { WorldView, OUTCOME_COLOR, shortModel } from './render/world.js';
 import { getPortrait, getSprite } from './render/sprites.js';
 import { Sound } from './sound.js';
 import { getDict, alertText, alertHint } from '../core/i18n.js';
@@ -13,21 +13,26 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 
 const params = new URLSearchParams(location.search);
 let lang = 'en';
-try { lang = localStorage.getItem('av.lang') || (navigator.language || 'en').slice(0, 2); } catch {}
+try { lang = localStorage.getItem('swarmstead.lang') || (navigator.language || 'en').slice(0, 2); } catch {}
 let T = getDict(lang);
 
 const sound = new Sound();
-const state = { snap: null, roster: [], selected: null, mode: 'demo', log: [], seenAlerts: new Set(), tab: 'alerts', sim: null, speed: 1 };
+const state = { snap: null, roster: [], selected: null, mode: 'demo', log: [], seenAlerts: new Set(), tab: 'alerts', sim: null, speed: 1, expanded: new Set() };
 
-const world = new WorldView($('world'), { sound, onSelect: (id) => { state.selected = id; renderSide(); } });
+const world = new WorldView($('world'), {
+  sound,
+  onSelect: (id) => { state.selected = id; renderSide(); },
+  onViewChange: (v, auto) => { renderViews(); renderLegend(); if (auto && v === 'arena') toast({ severity: 'info', kind: 'arena', custom: T.ui.arenaAuto }); },
+});
 world.onEvolve = (a, f) => showBanner(a, f);
 if (params.has('hour')) world.forceHour = Number(params.get('hour')); // preview day/night: ?demo&hour=22
 if (params.has('lang')) lang = params.get('lang');
+if (params.has('view')) world.setViewMode(params.get('view'));
 
 // ---------------------------------------------------------------- data sources
 
 async function boot() {
-  const wantDemo = params.has('demo') || location.protocol === 'file:' || globalThis.__AV_DEMO__;
+  const wantDemo = params.has('demo') || location.protocol === 'file:' || globalThis.__SWARMSTEAD_DEMO__;
   if (!wantDemo && await daemonReachable()) startLive();
   else startDemo();
 }
@@ -64,7 +69,7 @@ function setMode(m) {
   b.textContent = m === 'live' ? T.ui.live : m === 'demo' ? T.ui.demo : T.ui.offline;
   $('b-speed').hidden = state.mode !== 'demo';
   $('b-demo').textContent = state.mode === 'demo' ? 'LIVE' : 'DEMO';
-  $('b-demo').hidden = !!globalThis.__AV_DEMO__;
+  $('b-demo').hidden = !!globalThis.__SWARMSTEAD_DEMO__;
 }
 
 // ---------------------------------------------------------------- handlers
@@ -158,7 +163,7 @@ function drawSpark(burn) {
 
 const STATUS_COLOR = {
   writing: '#5cff8a', reading: '#7cf0ff', running: '#ffb35c', web: '#4d9dff', delegating: '#b69cff', planning: '#ffd34d',
-  thinking: '#ffffff', tool: '#9aa3b5', permission: '#ff4d6d', waiting: '#4d9dff', compacting: '#c58bff', idle: '#6f6390', done: '#6f6390',
+  thinking: '#ffffff', tool: '#9aa3b5', permission: '#ff4d6d', waiting: '#4d9dff', compacting: '#c58bff', exhausted: '#ff9a3c', idle: '#6f6390', done: '#6f6390',
 };
 
 function famOf(ag) {
@@ -173,6 +178,17 @@ function renderSide() {
   for (const al of s.alerts || []) if (al.agentId && (!alertBy.has(al.agentId) || al.severity === 'crit')) alertBy.set(al.agentId, al);
   const mains = agents.filter((a) => !a.parentId);
   const html = [];
+  const chips = (ag) => {
+    const out = [];
+    if (ag.mode && ag.mode !== 'default') out.push(`<span class="chip ${ag.mode === 'bypassPermissions' ? 'danger' : ''}">${esc(T.ui.mode[ag.mode] || ag.mode)}</span>`);
+    if (ag.effort) out.push(`<span class="chip">${esc(T.ui.effort)} ${esc(ag.effort)}</span>`);
+    if (ag.worktree) out.push(`<span class="chip tree">⎇ ${esc(ag.worktree)}</span>`);
+    if (ag.team) out.push(`<span class="chip">${esc(T.ui.team)} ${esc(ag.team)}</span>`);
+    if (ag.background) out.push(`<span class="chip">${ag.background} ${esc(T.ui.background)}</span>`);
+    if (ag.parallel >= 2) out.push(`<span class="chip">×${ag.parallel} ${esc(T.ui.parallel)}</span>`);
+    if (!ag.alive && ag.outcome) out.push(`<span class="chip" style="color:${OUTCOME_COLOR[ag.outcome]}">${esc(T.ui.outcome[ag.outcome] || ag.outcome)}</span>`);
+    return out.length ? `<div class="chips">${out.join('')}</div>` : '';
+  };
   const card = (ag, sub) => {
     const fam = famOf(ag);
     const pct = ag.context?.window ? ag.context.used / ag.context.window : 0;
@@ -184,20 +200,48 @@ function renderSide() {
         <div class="name"><b>${esc(fam.name)}</b><span class="form">${esc(fam.form)}</span><span class="lv">${T.ui.level}${fam.level}</span></div>
         <div class="meta"><span>${esc(sub ? ag.type : ag.project)}</span>${ag.provider !== 'claude' ? `<span>· ${esc(ag.provider)}</span>` : ''}<span>· ${fmtUsd(ag.cost)}</span>${ag.model ? `<span>· ${esc(shortModel(ag.model))}</span>` : ''}</div>
         <div class="status"><i class="dot" style="background:${STATUS_COLOR[ag.status] || '#999'}"></i><span class="what">${esc(T.status[ag.status] || ag.status)}</span><span class="det">${esc(ag.detail || '')}</span></div>
+        ${chips(ag)}
         <div class="mini"><span>${T.ui.xp}</span><div class="bar xpbar"><i style="width:${Math.round((fam.into / Math.max(1, fam.need)) * 100)}%"></i></div><span>${fam.into}/${fam.need}</span></div>
         <div class="mini"><span>CTX</span><div class="bar ctxbar ${cls}"><i style="width:${Math.round(pct * 100)}%"></i></div><span>${Math.round(pct * 100)}%</span></div>
       </div>
       ${al ? `<i class="alertdot" style="background:${al.severity === 'crit' ? 'var(--red)' : al.severity === 'warn' ? 'var(--gold)' : '#4d9dff'}"></i>` : ''}
     </div>`;
   };
+  // Big fan-outs: one summary row per stage instead of dozens of cards.
+  // Agents with alerts are always listed individually.
+  const stageRows = (m, kids) => {
+    const run = (s.runs || []).find((r) => r.id === m.runId);
+    const groups = new Map();
+    for (const c of kids) { const g = c.stage || c.type; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(c); }
+    const rows = [];
+    const stages = run ? run.stages : [...groups.keys()].map((name) => ({ name, total: groups.get(name).length, running: groups.get(name).filter((c) => c.alive).length, done: 0, failed: 0 }));
+    for (const st of stages) {
+      const live = (groups.get(st.name) || []);
+      const fam = state.snap.familiars?.[st.familiar] || (live[0] && famOf(live[0]));
+      const key = `${m.id}|${st.name}`;
+      const open = state.expanded.has(key);
+      const pct = st.total ? Math.round(((st.done + st.failed) / st.total) * 100) : 0;
+      rows.push(`<div class="card sub stagerow" data-stage="${esc(key)}">
+        ${fam ? `<img class="portrait" src="${getPortrait(fam)}" alt="">` : '<i></i>'}
+        <div style="min-width:0"><div class="name"><b>${esc(st.name)}</b><span class="form">${esc(fam?.form || '')}</span><span class="lv">${open ? '▾' : '▸'} ×${st.total}</span></div>
+        <div class="meta"><span style="color:var(--cyan)">${st.running} ${esc(T.ui.running)}</span><span>· ${st.done} ${esc(T.ui.doneN)}</span>${st.failed ? `<span style="color:var(--red)">· ${st.failed} ${esc(T.ui.failedN)}</span>` : ''}${st.cost ? `<span>· ${fmtUsd(st.cost)}</span>` : ''}</div>
+        <div class="mini"><span>${pct}%</span><div class="bar"><i style="width:${pct}%;background:${st.failed ? 'var(--gold)' : 'var(--green)'}"></i></div><span>${st.done + st.failed}/${st.total}</span></div></div></div>`);
+      for (const c of live) if (open || alertBy.has(c.id)) rows.push(card(c, true));
+    }
+    return rows;
+  };
   for (const m of mains) {
     html.push(card(m, false));
-    for (const id of m.children) { const c = agents.find((x) => x.id === id); if (c) html.push(card(c, true)); }
+    const kids = m.children.map((id) => agents.find((x) => x.id === id)).filter(Boolean);
+    const run = (s.runs || []).find((r) => r.id === m.runId);
+    if (kids.length > 6 || (run && run.total > 8)) html.push(...stageRows(m, kids));
+    else for (const c of kids) html.push(card(c, true));
   }
   for (const orphan of agents.filter((a) => a.parentId && !agents.some((m) => m.id === a.parentId))) html.push(card(orphan, true));
   $('party').innerHTML = html.join('') || `<div class="allclear" style="color:var(--muted)">${esc(T.ui.empty)}</div>`;
   $('party-n').textContent = agents.filter((a) => a.alive).length;
-  for (const el of document.querySelectorAll('.card')) el.onclick = () => world.select(el.dataset.id === state.selected ? null : el.dataset.id);
+  for (const el of document.querySelectorAll('.card[data-id]')) el.onclick = () => world.select(el.dataset.id === state.selected ? null : el.dataset.id);
+  for (const el of document.querySelectorAll('.stagerow')) el.onclick = () => { const k = el.dataset.stage; state.expanded.has(k) ? state.expanded.delete(k) : state.expanded.add(k); renderSide(); };
   renderDetail();
 }
 
@@ -221,7 +265,11 @@ function renderDetail() {
     ${g ? `<div class="gate ${g.ready ? 'ready' : ''}">${esc(T.ui.next)}: ${T.ui.level}${g.level} + ${esc(g.need)} ${g.ready ? '✓' : ''}</div>` : ''}
     <dl class="kv">
       <dt>${esc(T.ui.party === 'Party' ? 'Doing' : 'Đang làm')}</dt><dd>${esc(T.status[ag.status] || ag.status)} ${esc(ag.detail || '')}</dd>
-      <dt>${esc(T.ui.model)}</dt><dd>${esc(ag.model || '—')}</dd>
+      <dt>${esc(T.ui.model)}</dt><dd>${esc(ag.model || '—')}${ag.effort ? ` · ${esc(ag.effort)}` : ''}</dd>
+      ${ag.mode ? `<dt>Mode</dt><dd>${esc(T.ui.mode[ag.mode] || ag.mode)}</dd>` : ''}
+      ${ag.worktree ? `<dt>${esc(T.ui.worktree)}</dt><dd>${esc(ag.worktree)}</dd>` : ''}
+      ${ag.stage && ag.parentId ? `<dt>${esc(T.ui.stage)}</dt><dd>${esc(ag.stage)}</dd>` : ''}
+      ${ag.thinking ? `<dt>${esc(T.ui.thinking)}</dt><dd>${fmtTokens(ag.thinking)}</dd>` : ''}
       <dt>${esc(T.ui.cost)}</dt><dd>${fmtUsd(ag.cost)} · ${fmtTokens(ag.input + ag.output + ag.cacheRead + ag.cacheWrite)} tok</dd>
       <dt>${esc(T.ui.context)}</dt><dd>${fmtTokens(ag.context.used)} / ${fmtTokens(ag.context.window)} (${pct}%)</dd>
       <dt>${esc(T.ui.streak)}</dt><dd>${fam.streak || 0} (best ${fam.bestStreak || 0})</dd>
@@ -232,7 +280,6 @@ function renderDetail() {
 }
 
 function statColor(k) { return { focus: '#7cf0ff', thrift: '#ffd34d', craft: '#5cff8a', cache: '#b69cff', grit: '#ffb35c' }[k]; }
-function shortModel(m) { return String(m).replace(/^claude-/, '').replace(/-\d{8}$/, ''); }
 
 // ---------------------------------------------------------------- bottom tabs
 
@@ -254,6 +301,7 @@ function renderBottom() {
   if (state.tab === 'alerts') renderAlerts();
   if (state.tab === 'log') renderLog();
   if (state.tab === 'roster') renderRoster();
+  if (state.tab === 'timeline') renderTimeline();
 }
 
 function renderAlerts() {
@@ -317,7 +365,9 @@ function showBanner(a, f) {
 function toast(al) {
   const el = document.createElement('div');
   el.className = `toast ${al.severity === 'crit' ? '' : 'warn'}`;
-  el.innerHTML = `<b style="color:${al.severity === 'crit' ? 'var(--red)' : 'var(--gold)'}">${al.severity === 'crit' ? '⚠ CRITICAL' : '⚠ WARNING'}</b>${esc(alertText(T, al))}`;
+  el.className = `toast ${al.severity === 'crit' ? '' : al.severity === 'info' ? 'info' : 'warn'}`;
+  const head = al.severity === 'crit' ? '⚠ CRITICAL' : al.severity === 'info' ? '★ ARENA' : '⚠ WARNING';
+  el.innerHTML = `<b style="color:${al.severity === 'crit' ? 'var(--red)' : al.severity === 'info' ? 'var(--violet)' : 'var(--gold)'}">${head}</b>${esc(al.custom || alertText(T, al))}`;
   $('toasts').appendChild(el);
   setTimeout(() => el.remove(), 6500);
   while ($('toasts').children.length > 3) $('toasts').firstChild.remove();
@@ -333,12 +383,26 @@ function applyLang() {
     if (typeof v === 'string') el.textContent = v;
   }
   $('b-lang').textContent = lang.toUpperCase();
+  world.allInText = T.ui.allIn;
+  renderViews();
   setMode(state.mode === 'live' ? 'live' : 'demo');
   renderLegend();
   renderSide(); renderBottom();
 }
 
 function renderLegend() {
+  if (world.view === 'arena') {
+    const vi = lang === 'vi';
+    const items = [
+      ['#7dff9a', vi ? 'Cuộn xanh = báo cáo sạch' : 'Green scroll = clean report'],
+      ['#ffd34d', vi ? 'Vàng = có trục trặc' : 'Yellow = rough'],
+      ['#ff5c7a', vi ? 'Đỏ = thất bại' : 'Red = failed'],
+      ['#c58bff', vi ? 'Tím = có thể mất khi nén' : 'Purple = maybe lost to compaction'],
+      ['#b69cff', vi ? 'Bệ = giai đoạn, ×N = đội' : 'Pad = stage, ×N = squad'],
+    ];
+    $('legend').innerHTML = items.map(([c, t]) => `<span><i style="background:${c}"></i>${esc(t)}</span>`).join('');
+    return;
+  }
   const items = [
     ['#7cf0ff', lang === 'vi' ? 'Kệ sách = đọc' : 'Bookshelf = reading'],
     ['#ffd34d', lang === 'vi' ? 'Bảng = kế hoạch' : 'Whiteboard = planning'],
@@ -350,12 +414,76 @@ function renderLegend() {
   $('legend').innerHTML = items.map(([c, t]) => `<span><i style="background:${c}"></i>${esc(t)}</span>`).join('');
 }
 
-$('b-lang').onclick = () => { lang = lang === 'vi' ? 'en' : 'vi'; try { localStorage.setItem('av.lang', lang); } catch {} applyLang(); };
+$('b-lang').onclick = () => { lang = lang === 'vi' ? 'en' : 'vi'; try { localStorage.setItem('swarmstead.lang', lang); } catch {} applyLang(); };
 $('b-sound').onclick = () => { const on = sound.toggle(); $('b-sound').textContent = on ? '♪ ON' : '♪ OFF'; $('b-sound').classList.toggle('on', on); };
 $('b-sound').textContent = sound.enabled ? '♪ ON' : '♪ OFF';
 $('b-sound').classList.toggle('on', sound.enabled);
 $('b-speed').onclick = () => { state.speed = state.speed >= 4 ? 1 : state.speed * 2; state.sim?.setSpeed(state.speed); $('b-speed').textContent = `${state.speed}×`; };
 $('b-demo').onclick = () => { location.search = state.mode === 'demo' ? '' : '?demo'; };
+for (const b of document.querySelectorAll('#views [data-view]')) b.onclick = () => { world.setViewMode(b.dataset.view); renderViews(); renderLegend(); };
+
+function renderViews() {
+  for (const b of document.querySelectorAll('#views [data-view]')) {
+    b.classList.toggle('on', b.dataset.view === world.viewMode);
+    if (b.dataset.view !== 'auto') b.textContent = b.dataset.view === 'room' ? T.ui.room : T.ui.arena;
+  }
+  $('view-now').textContent = world.viewMode === 'auto' ? `→ ${world.view === 'arena' ? T.ui.arena : T.ui.room}` : '';
+}
+
+// ---------------------------------------------------------------- timeline (swimlanes of the focus run)
+
+function renderTimeline() {
+  const pane = $('pane-timeline');
+  const run = world.focusRun;
+  if (!run) { pane.innerHTML = `<div class="allclear" style="color:var(--muted)">${esc(T.ui.noRun)}</div>`; return; }
+  if (!$('tl')) pane.innerHTML = '<div class="tl-head" id="tl-head"></div><div class="tl-wrap"><canvas id="tl"></canvas></div>';
+  const now = state.snap.now;
+  $('tl-head').innerHTML = `<b>${esc(run.workflow || run.project)}</b> · ${run.done + run.failed}/${run.total} ${esc(T.ui.doneN)} · ${run.running} ${esc(T.ui.running)}${run.failed ? ` · <span style="color:var(--red)">${run.failed} ${esc(T.ui.failedN)}</span>` : ''} · ${fmtUsd(run.cost)} · ${fmtDuration((run.endedAt || now) - run.startedAt)}`;
+  const cv = $('tl');
+  const W = Math.max(320, cv.parentElement.clientWidth - 2);
+  const rows = run.timeline.length;
+  const labelW = 110;
+  const rowH = rows > 120 ? 2 : rows > 60 ? 3 : rows > 30 ? 5 : 8;
+  const gap = rowH >= 5 ? 1 : 0;
+  const stageGap = 6;
+  const H = Math.max(80, rows * (rowH + gap) + run.stages.length * stageGap + 26);
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  const x = cv.getContext('2d');
+  x.scale(dpr, dpr);
+  x.clearRect(0, 0, W, H);
+  const t0 = run.startedAt, t1 = Math.max(run.endedAt || now, t0 + 60_000);
+  const sx = (ts) => labelW + ((ts - t0) / (t1 - t0)) * (W - labelW - 8);
+  // grid: one line per minute (or 5 min)
+  const span = (t1 - t0) / 60_000;
+  const step = span > 60 ? 10 : span > 20 ? 5 : 1;
+  x.font = '10px ui-monospace, Menlo, monospace';
+  for (let m = 0; m <= span; m += step) {
+    const gx = Math.round(sx(t0 + m * 60_000)) + 0.5;
+    x.fillStyle = '#2f2645'; x.fillRect(gx, 14, 1, H - 14);
+    x.fillStyle = '#6f6390'; x.fillText(`${m}m`, gx + 2, 10);
+  }
+  let y = 18;
+  const medians = new Map(run.stages.map((st, i) => [i, st.median]));
+  run.stages.forEach((st, si) => {
+    const items = run.timeline.filter((r) => r[1] === si).sort((a, b) => a[2] - b[2]);
+    x.fillStyle = '#a497c4';
+    x.fillText(`${st.name.slice(0, 14)} ${st.done + st.failed}/${st.total}`, 4, y + Math.max(8, rowH));
+    for (const [, , start, end, outcome] of items) {
+      const e = end || now;
+      const bx = sx(start), bw = Math.max(2, sx(e) - bx);
+      const running = !end;
+      x.fillStyle = running ? (Math.floor(Date.now() / 400) % 2 ? '#7cf0ff' : '#5ad6e8') : (OUTCOME_COLOR[outcome] || '#7dff9a');
+      x.fillRect(bx, y, bw, rowH);
+      const med = medians.get(si);
+      if (running && med && e - start > 3 * med && e - start > 120_000) { x.strokeStyle = '#ff4d6d'; x.lineWidth = 1; x.strokeRect(bx - 0.5, y - 0.5, bw + 1, rowH + 1); }
+      y += rowH + gap;
+    }
+    y += stageGap;
+  });
+  const nx = Math.round(sx(now)) + 0.5;
+  if (!run.endedAt) { x.fillStyle = '#ffd34d'; x.fillRect(nx, 14, 1, H - 14); }
+}
 
 // animated logo villager
 (function logo() {

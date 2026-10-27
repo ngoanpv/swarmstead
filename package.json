@@ -1,10 +1,10 @@
 {
-  "name": "agent-village",
+  "name": "swarmstead",
   "version": "0.1.0",
   "description": "Watch your Claude Code (and Codex) agents live as pixel characters: handoffs, cost, loops, stuck permissions, context pressure — and familiars that evolve with good habits.",
   "type": "module",
   "bin": {
-    "agent-village": "bin/agent-village.js"
+    "swarmstead": "bin/swarmstead.js"
   },
   "files": [
     "bin",
@@ -18,10 +18,11 @@
     "LICENSE"
   ],
   "scripts": {
-    "start": "node bin/agent-village.js start",
-    "dev": "node bin/agent-village.js start --open",
+    "start": "node bin/swarmstead.js start",
+    "dev": "node bin/swarmstead.js start --open",
     "test": "node --test",
-    "build:demo": "node scripts/build-demo.js"
+    "build:demo": "node scripts/build-demo.js",
+    "gen:hooks": "node scripts/gen-plugin-hooks.js"
   },
   "engines": {
     "node": ">=18.17"

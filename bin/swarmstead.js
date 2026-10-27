@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// agent-village CLI
+// swarmstead CLI
 //
-//   agent-village [start] [--port 4317] [--open]   run the daemon + pixel UI
-//   agent-village install claude [--project]       add forwarding hooks to Claude Code
-//   agent-village uninstall claude [--project]
-//   agent-village install codex                    (beta) add hooks to ~/.codex/hooks.json
-//   agent-village uninstall codex
-//   agent-village doctor                           check that everything is wired up
-//   agent-village ping                             send a fake mini-session to a running daemon
+//   swarmstead [start] [--port 4317] [--open]   run the daemon + pixel UI
+//   swarmstead install claude [--project]       add forwarding hooks to Claude Code
+//   swarmstead uninstall claude [--project]
+//   swarmstead install codex                    (beta) add hooks to ~/.codex/hooks.json
+//   swarmstead uninstall codex
+//   swarmstead doctor                           check that everything is wired up
+//   swarmstead ping                             send a fake mini-session to a running daemon
 
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
@@ -40,15 +40,15 @@ async function main() {
 
 function help() {
   console.log(`
-${c.bold('agent-village')} — your coding agents, as a living pixel village
+${c.bold('swarmstead')} — your coding agents, as a living pixel village
 
-  agent-village [start] [--port 4317] [--open]   run the daemon and open the village
-  agent-village install claude [--project]       forward Claude Code hook events
-  agent-village uninstall claude [--project]
-  agent-village install codex                    (beta) forward Codex CLI hook events
-  agent-village uninstall codex
-  agent-village doctor                           check the setup
-  agent-village ping                             send a fake mini-session to the daemon
+  swarmstead [start] [--port 4317] [--open]   run the daemon and open the village
+  swarmstead install claude [--project]       forward Claude Code hook events
+  swarmstead uninstall claude [--project]
+  swarmstead install codex                    (beta) forward Codex CLI hook events
+  swarmstead uninstall codex
+  swarmstead doctor                           check the setup
+  swarmstead ping                             send a fake mini-session to the daemon
 
   Demo without any agent: start, then open  http://127.0.0.1:4317/web/?demo
 `);
@@ -56,20 +56,20 @@ ${c.bold('agent-village')} — your coding agents, as a living pixel village
 
 async function start() {
   const { startDaemon } = await import('../server/daemon.js');
-  const port = Number(opt('port', process.env.AGENT_VILLAGE_PORT || 4317));
+  const port = Number(opt('port', process.env.SWARMSTEAD_PORT || 4317));
   let d;
   try {
     d = await startDaemon({ port });
   } catch (err) {
     if (err.code === 'EADDRINUSE') {
-      console.error(c.yellow(`Port ${port} is busy — is Agent Village already running? Try --port 4318`));
+      console.error(c.yellow(`Port ${port} is busy — is Swarmstead already running? Try --port 4318`));
       process.exitCode = 1; return;
     }
     throw err;
   }
   const { installClaudeHint } = await hints();
   console.log(`
-  ${c.bold('🏘  Agent Village')} is running at ${c.green(d.url + '/web/')}
+  ${c.bold('🏘  Swarmstead')} is running at ${c.green(d.url + '/web/')}
   ${c.dim(`demo mode: ${d.url}/web/?demo`)}
   ${c.dim(`picked up ${d.booted.claude} Claude transcript(s), ${d.booted.codex} Codex rollout(s) from today`)}
 ${installClaudeHint}`);
@@ -82,10 +82,10 @@ ${installClaudeHint}`);
 async function hints() {
   const { claudeInstalled } = await import('../server/install.js');
   const pluginDir = path.join(os.homedir(), '.claude', 'plugins');
-  const viaPlugin = fs.existsSync(pluginDir) && JSON.stringify(safeList(pluginDir)).includes('agent-village');
+  const viaPlugin = fs.existsSync(pluginDir) && JSON.stringify(safeList(pluginDir)).includes('swarmstead');
   const ok = claudeInstalled('user') || viaPlugin;
   return {
-    installClaudeHint: ok ? '' : `\n  ${c.yellow('Claude Code hooks are not installed yet.')} Run: ${c.bold('npx agent-village install claude')}\n`,
+    installClaudeHint: ok ? '' : `\n  ${c.yellow('Claude Code hooks are not installed yet.')} Run: ${c.bold('npx swarmstead install claude')}\n`,
   };
 }
 
@@ -96,13 +96,13 @@ async function install(what) {
   if (what === 'claude') {
     const r = m.installClaude({ scope: flag('project') ? 'project' : 'user' });
     console.log(`${c.green('✓')} Added ${r.events} async hooks to ${r.file}`);
-    console.log(c.dim('  A backup was saved next to it (*.agent-village.bak). New Claude Code sessions will show up in the village.'));
+    console.log(c.dim('  A backup was saved next to it (*.swarmstead.bak). New Claude Code sessions will show up in the village.'));
   } else if (what === 'codex') {
     const r = m.installCodex();
     console.log(`${c.green('✓')} Added ${r.events} hooks to ${r.file}  ${c.yellow('(beta)')}`);
-    console.log(c.yellow('  Codex only runs hooks you have trusted: open Codex, run /hooks and trust the agent-village entries.'));
+    console.log(c.yellow('  Codex only runs hooks you have trusted: open Codex, run /hooks and trust the swarmstead entries.'));
   } else {
-    console.error('Usage: agent-village install <claude|codex> [--project]');
+    console.error('Usage: swarmstead install <claude|codex> [--project]');
     process.exitCode = 1;
   }
 }
@@ -111,19 +111,19 @@ async function uninstall(what) {
   const m = await import('../server/install.js');
   if (what === 'claude') {
     const r = m.uninstallClaude({ scope: flag('project') ? 'project' : 'user' });
-    console.log(r.removed ? `${c.green('✓')} Removed Agent Village hooks from ${r.file}` : `Nothing to remove in ${r.file}`);
+    console.log(r.removed ? `${c.green('✓')} Removed Swarmstead hooks from ${r.file}` : `Nothing to remove in ${r.file}`);
   } else if (what === 'codex') {
     const r = m.uninstallCodex();
-    console.log(r.removed ? `${c.green('✓')} Removed Agent Village hooks from ${r.file}` : `Nothing to remove in ${r.file}`);
+    console.log(r.removed ? `${c.green('✓')} Removed Swarmstead hooks from ${r.file}` : `Nothing to remove in ${r.file}`);
   } else {
-    console.error('Usage: agent-village uninstall <claude|codex>');
+    console.error('Usage: swarmstead uninstall <claude|codex>');
     process.exitCode = 1;
   }
 }
 
 async function doctor() {
   const m = await import('../server/install.js');
-  const port = Number(opt('port', process.env.AGENT_VILLAGE_PORT || 4317));
+  const port = Number(opt('port', process.env.SWARMSTEAD_PORT || 4317));
   const line = (ok, text) => console.log(`${ok ? c.green('✓') : c.yellow('•')} ${text}`);
   const [major] = process.versions.node.split('.').map(Number);
   line(major >= 18, `Node ${process.versions.node} ${major >= 18 ? '' : '(need 18+)'}`);
@@ -132,11 +132,11 @@ async function doctor() {
   line(fs.existsSync(path.join(os.homedir(), '.claude', 'projects')), 'Claude Code transcripts folder exists');
   line(fs.existsSync(m.codexHooksPath()), `Codex hooks file (${m.codexHooksPath()}) — optional`);
   const health = await get(`http://127.0.0.1:${port}/api/health`).catch(() => null);
-  line(!!health, health ? `daemon running on :${port} (${health.clients} viewer(s))` : `daemon not running on :${port} — run: agent-village start`);
+  line(!!health, health ? `daemon running on :${port} (${health.clients} viewer(s))` : `daemon not running on :${port} — run: swarmstead start`);
 }
 
 async function ping() {
-  const port = Number(opt('port', process.env.AGENT_VILLAGE_PORT || 4317));
+  const port = Number(opt('port', process.env.SWARMSTEAD_PORT || 4317));
   const sid = 'ping-' + Date.now().toString(36);
   const cwd = path.join(os.tmpdir(), 'village-ping');
   const steps = [
@@ -149,7 +149,7 @@ async function ping() {
     { hook_event_name: 'Stop' },
   ];
   for (const s of steps) {
-    await post(`http://127.0.0.1:${port}/api/hook/claude`, { session_id: sid, cwd, transcript_path: '', ...s, _av_ts: Date.now() });
+    await post(`http://127.0.0.1:${port}/api/hook/claude`, { session_id: sid, cwd, transcript_path: '', ...s, _ss_ts: Date.now() });
     await new Promise((r) => setTimeout(r, 700));
   }
   console.log(`${c.green('✓')} Sent a fake session "${sid}" — look for a new villager in the "village-ping" project.`);

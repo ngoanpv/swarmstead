@@ -90,7 +90,15 @@ export function scoreTurn(s, f) {
   const bugs = s.testFixes || 0;
   let xp = 10 * work * quality * thrift * cache + 15 * bugs + (clean ? 5 : 0);
   if ((s.tools || 0) === 0 && !(s.output > 0)) xp = 1; // pure chat turns still count a little
-  return { xp: Math.max(1, Math.round(xp)), work, quality, thrift, cache, cacheRatio, cpw, clean, bugs };
+  // Swarms: a workflow can launch hundreds of subagents. Each one's XP shrinks
+  // with the swarm size (√), so running more agents is never a way to level up;
+  // the orchestrator is rewarded once, at fan-in, for the run's success rate.
+  const swarm = Math.max(1, s.swarm || 1);
+  const swarmFactor = swarm > 4 ? Math.sqrt(4 / swarm) : 1;
+  // A report that came back failed is worth less (rate limits are not the agent's fault).
+  const outcomeFactor = s.outcome === 'failed' && !/rate|overload|billing|quota/.test(s.failure || '') ? 0.6 : 1;
+  xp *= swarmFactor * outcomeFactor;
+  return { xp: Math.max(1, Math.round(xp)), work, quality, thrift, cache, cacheRatio, cpw, clean, bugs, swarmFactor };
 }
 
 export class Evolution {
@@ -162,12 +170,34 @@ export class Evolution {
       fx.push({ fx: 'shiny', familiar: f.key, agentId });
     }
 
+    this.grant(f, gained, now, agentId, fx, sc);
+    return fx;
+  }
+
+  /**
+   * Fan-in bonus for an orchestrator when every subagent of a run has reported back.
+   * Scales with √(agents) but is capped, and multiplied by the success rate.
+   */
+  onRunComplete(key, run, now = Date.now(), agentId) {
+    const fx = [];
+    const f = this.familiars.get(key);
+    if (!f) return fx;
+    const o = run.outcomes || {};
+    const total = Math.max(1, run.total || 0);
+    const success = clamp(((o.clean || 0) + 0.5 * (o.rough || 0) + 0.25 * (o.lost || 0)) / total, 0, 1);
+    const xp = Math.round(20 * Math.min(10, Math.sqrt(total)) * success * this.xpMultiplier);
+    f.runs = (f.runs || 0) + 1;
+    if (xp > 0) this.grant(f, xp, now, agentId, fx, { fanin: true, success });
+    return fx;
+  }
+
+  grant(f, gained, now, agentId, fx, score) {
     // --- xp & level
     const before = f.level;
     f.xp += gained;
     const lv = levelFromXp(f.xp);
     f.level = lv.level;
-    fx.push({ fx: 'xp', familiar: f.key, agentId, xp: gained, score: sc });
+    fx.push({ fx: 'xp', familiar: f.key, agentId, xp: gained, score });
     if (f.level > before) {
       fx.push({ fx: 'levelup', familiar: f.key, agentId, level: f.level });
       f.history.push({ ts: now, event: 'level', level: f.level });
@@ -186,7 +216,6 @@ export class Evolution {
       fx.push({ fx: f.stage === 1 ? 'hatch' : 'evolve', familiar: f.key, agentId, from, to, stage: f.stage });
     }
     if (f.history.length > 60) f.history.splice(0, f.history.length - 60);
-    return fx;
   }
 
   view(key) {

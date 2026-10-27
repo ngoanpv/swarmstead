@@ -5,7 +5,7 @@
 // These are ESTIMATES used to turn token counts into "API-equivalent" cost.
 // On a subscription plan (Claude Pro/Max, ChatGPT sign-in for Codex) you are
 // not billed per token; the number is still a useful efficiency signal.
-// Override or add entries in ~/.agent-village/config.json:
+// Override or add entries in ~/.swarmstead/config.json:
 //   { "pricing": { "my-model": { "input": 3, "output": 15, "cacheWrite": 3.75, "cacheRead": 0.3 } } }
 //
 // Matching is by case-insensitive substring, FIRST match wins, so specific

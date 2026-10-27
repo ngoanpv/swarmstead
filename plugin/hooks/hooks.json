@@ -1,12 +1,12 @@
 {
-  "description": "Forward Claude Code lifecycle events to the local Agent Village daemon (http://127.0.0.1:4317). Never blocks, never prints.",
+  "description": "Forward Claude Code lifecycle events to the local Swarmstead daemon (http://127.0.0.1:4317). Async, never blocks, never prints.",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-village-hook.mjs\" claude",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-hook.mjs\" claude",
             "timeout": 5,
             "async": true
           }
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-village-hook.mjs\" claude",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-hook.mjs\" claude",
             "timeout": 5,
             "async": true
           }
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-village-hook.mjs\" claude",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-hook.mjs\" claude",
             "timeout": 5,
             "async": true
           }
@@ -43,7 +43,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-village-hook.mjs\" claude",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-hook.mjs\" claude",
             "timeout": 5,
             "async": true
           }
@@ -56,7 +56,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-village-hook.mjs\" claude",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-hook.mjs\" claude",
             "timeout": 5,
             "async": true
           }
@@ -69,7 +69,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-village-hook.mjs\" claude",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-hook.mjs\" claude",
             "timeout": 5,
             "async": true
           }
@@ -82,7 +82,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-village-hook.mjs\" claude",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-hook.mjs\" claude",
             "timeout": 5,
             "async": true
           }
@@ -95,7 +95,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-village-hook.mjs\" claude",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-hook.mjs\" claude",
             "timeout": 5,
             "async": true
           }
@@ -107,7 +107,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-village-hook.mjs\" claude",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-hook.mjs\" claude",
             "timeout": 5,
             "async": true
           }
@@ -119,7 +119,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-village-hook.mjs\" claude",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-hook.mjs\" claude",
             "timeout": 5,
             "async": true
           }
@@ -131,7 +131,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-village-hook.mjs\" claude",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-hook.mjs\" claude",
             "timeout": 5,
             "async": true
           }
@@ -143,7 +143,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-village-hook.mjs\" claude",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-hook.mjs\" claude",
             "timeout": 5,
             "async": true
           }
@@ -155,7 +155,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-village-hook.mjs\" claude",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-hook.mjs\" claude",
             "timeout": 5,
             "async": true
           }
@@ -167,7 +167,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-village-hook.mjs\" claude",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-hook.mjs\" claude",
             "timeout": 5,
             "async": true
           }
@@ -179,7 +179,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-village-hook.mjs\" claude",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-hook.mjs\" claude",
             "timeout": 5,
             "async": true
           }
@@ -191,7 +191,79 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-village-hook.mjs\" claude",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-hook.mjs\" claude",
+            "timeout": 5,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "TaskCreated": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-hook.mjs\" claude",
+            "timeout": 5,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-hook.mjs\" claude",
+            "timeout": 5,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostModelSwitch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-hook.mjs\" claude",
+            "timeout": 5,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "CwdChanged": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-hook.mjs\" claude",
+            "timeout": 5,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Elicitation": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-hook.mjs\" claude",
+            "timeout": 5,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "ElicitationResult": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-hook.mjs\" claude",
             "timeout": 5,
             "async": true
           }

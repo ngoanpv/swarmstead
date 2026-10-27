@@ -46,7 +46,27 @@ export function shortPath(p, segments = 2) {
   return parts.slice(-segments).join('/');
 }
 
+// Worktrees should count as the same project, labelled with the worktree name:
+//   /repo/.claude/worktrees/fix-auth  -> project "repo", worktree "fix-auth"
+//   /work/repo-worktrees/feature-x    -> project "repo", worktree "feature-x"
+const WORKTREE_PATTERNS = [
+  /^(.*?)[\\/]\.claude[\\/]worktrees[\\/]([^\\/]+)/,
+  /^(.*?)[\\/]\.worktrees[\\/]([^\\/]+)/,
+  /^(.*?)-worktrees[\\/]([^\\/]+)/,
+];
+
+export function worktreeOf(cwd) {
+  if (!cwd) return null;
+  for (const re of WORKTREE_PATTERNS) {
+    const m = String(cwd).match(re);
+    if (m) return { root: m[1], name: m[2] };
+  }
+  return null;
+}
+
 export function projectName(cwd) {
+  const wt = worktreeOf(cwd);
+  if (wt) return shortPath(wt.root, 1) || 'unknown';
   return shortPath(cwd, 1) || 'unknown';
 }
 

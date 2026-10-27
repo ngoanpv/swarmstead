@@ -19,6 +19,10 @@ export class Village {
     if (!isValidEvent(ev)) return [];
     const now = ev.ts || Date.now();
     const fx = this.world.apply(ev);
+    return this.process(fx, now);
+  }
+
+  process(fx, now) {
     const out = [...fx];
     for (const f of fx) {
       if (f.fx === 'spawn') {
@@ -30,6 +34,13 @@ export class Village {
         out.push(...this.evolution.onTurn(f.summary, now, f.agentId));
         this.rosterDirty = true;
       }
+      if (f.fx === 'fanin') {
+        const parent = this.world.agents.get(f.agentId);
+        if (parent && f.total >= 2) {
+          out.push(...this.evolution.onRunComplete(parent.familiar, f, now, parent.id));
+          this.rosterDirty = true;
+        }
+      }
     }
     this.detectors.onEffects(this.world, fx, now, out);
     out.push(...this.detectors.evaluate(this.world, now));
@@ -37,7 +48,9 @@ export class Village {
   }
 
   tick(now = Date.now()) {
-    const out = this.detectors.evaluate(this.world, now);
+    const fx = [];
+    this.world.tickRuns(now, fx);
+    const out = fx.length ? this.process(fx, now) : this.detectors.evaluate(this.world, now);
     this.world.gc(now);
     return out;
   }
@@ -48,6 +61,16 @@ export class Village {
     for (const a of snap.agents) {
       const f = this.evolution.familiars.get(a.familiar);
       if (f) familiars[a.familiar] = describe(f);
+    }
+    // stage types inside runs also need their familiar for squads / arena pads
+    for (const r of snap.runs) {
+      const parent = this.world.agents.get(r.parentId);
+      for (const s of r.stages) {
+        const key = `${parent?.provider || 'claude'}:${r.project}:${s.type}`;
+        const f = this.evolution.familiars.get(key);
+        if (f && !familiars[key]) familiars[key] = describe(f);
+        s.familiar = key;
+      }
     }
     snap.familiars = familiars;
     snap.alerts = this.detectors.list();

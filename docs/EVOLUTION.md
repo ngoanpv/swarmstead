@@ -31,6 +31,14 @@ xp       = 10·work·quality·thrift·cache + 15·bugsSlain + (clean ? 5 : 0)
 - **thrift** compares the turn against the familiar's *own* moving baseline (EMA, α=0.1). An agent that is expensive but improving still gets rewarded, and spending more than usual reduces XP.
 - A **bug slain** means a test or build command failed (a monster spawned) and a later run of the same kind of command passed.
 
+## Swarms and fan-in
+
+A Claude Code workflow can run hundreds of subagents. If each earned full XP, launching more agents would be the fastest way to level up, which is exactly the habit we don't want to reward.
+
+- **Subagent turns** in a run of more than 4 agents are multiplied by `√(4 / swarm)`. At 16 agents that's 0.5×, and at 100 agents 0.2×.
+- **The orchestrator** gets one fan-in bonus when every agent of the run has reported back: `20 × min(10, √total) × success`. Here `success = (clean + ½·rough + ¼·lost) / total`.
+- A report that comes back **failed** is worth 0.6×, unless the failure was a rate limit, overload, billing or quota stop (not the agent's fault).
+
 ## Levels
 
 `xpForLevel(n) = round(40 · n^1.5)` is the XP needed to go from level *n* to *n*+1. With typical turns worth 40–80 XP:

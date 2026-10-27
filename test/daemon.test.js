@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'av-home-'));
-process.env.AGENT_VILLAGE_HOME = home;
+process.env.SWARMSTEAD_HOME = home;
 fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claude: { transcripts: path.join(home, 'none') }, codex: { sessions: path.join(home, 'none') } }));
 
 const { startDaemon } = await import('../server/daemon.js');
@@ -23,9 +23,9 @@ test('hook script -> daemon -> state, plus transcript usage', async () => {
   try {
     const transcript = path.join(home, 'S9.jsonl');
     fs.writeFileSync(transcript, '');
-    const hook = (payload) => spawnSync(process.execPath, [path.join(ROOT, 'plugin/hooks/agent-village-hook.mjs'), 'claude'], {
+    const hook = (payload) => spawnSync(process.execPath, [path.join(ROOT, 'plugin/hooks/swarmstead-hook.mjs'), 'claude'], {
       input: JSON.stringify({ session_id: 'S9', cwd: '/w/e2e', transcript_path: transcript, ...payload }),
-      env: { ...process.env, AGENT_VILLAGE_URL: `http://127.0.0.1:${port}` },
+      env: { ...process.env, SWARMSTEAD_URL: `http://127.0.0.1:${port}` },
     });
     let r = hook({ hook_event_name: 'SessionStart', source: 'startup' });
     assert.equal(r.status, 0);
@@ -43,8 +43,8 @@ test('hook script -> daemon -> state, plus transcript usage', async () => {
     assert.ok(!JSON.stringify(state).includes('secret content'), 'file contents never reach state');
 
     // hook exits cleanly even when the daemon is gone
-    const dead = spawnSync(process.execPath, [path.join(ROOT, 'plugin/hooks/agent-village-hook.mjs'), 'claude'], {
-      input: '{"session_id":"x","hook_event_name":"Stop"}', env: { ...process.env, AGENT_VILLAGE_URL: 'http://127.0.0.1:1' }, timeout: 3000,
+    const dead = spawnSync(process.execPath, [path.join(ROOT, 'plugin/hooks/swarmstead-hook.mjs'), 'claude'], {
+      input: '{"session_id":"x","hook_event_name":"Stop"}', env: { ...process.env, SWARMSTEAD_URL: 'http://127.0.0.1:1' }, timeout: 3000,
     });
     assert.equal(dead.status, 0);
 
@@ -77,5 +77,5 @@ test('installer adds and removes only its own hooks', () => {
   uninstallClaude({ scope: 'project', cwd });
   s = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.deepEqual(s.hooks, { Stop: [{ hooks: [mine] }] });
-  assert.ok(fs.existsSync(file + '.agent-village.bak'));
+  assert.ok(fs.existsSync(file + '.swarmstead.bak'));
 });

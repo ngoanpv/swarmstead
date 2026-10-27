@@ -1,8 +1,8 @@
 # Architecture
 
 ```
-agent-village/
-├─ bin/agent-village.js        CLI: start, install/uninstall, doctor, ping
+swarmstead/
+├─ bin/swarmstead.js        CLI: start, install/uninstall, doctor, ping
 ├─ core/                       isomorphic ES modules (daemon + browser)
 │  ├─ schema.js                normalized event kinds, tool categories
 │  ├─ state.js                 World: reducer over events → agents, totals, handoffs, effects
@@ -24,14 +24,14 @@ agent-village/
 ├─ .claude-plugin/marketplace.json
 ├─ web/                        the pixel village (no build step)
 │  ├─ index.html, main.js, sound.js
-│  ├─ render/ sprites.js, scene.js, world.js, pixelfont.js
+│  ├─ render/ sprites.js, scene.js (room), arena.js (big runs), world.js, pixelfont.js
 │  └─ sim/demo.js              scripted demo using the real engine
 └─ test/                       node:test suites (core, adapters, end-to-end daemon)
 ```
 
 ## Data flow
 
-1. **Hooks**: Claude Code runs `plugin/hooks/agent-village-hook.mjs` for each lifecycle event (`async: true`). The script stamps the time and POSTs the raw payload to `/api/hook/claude`, with an 800 ms timeout. It never prints and always exits 0.
+1. **Hooks**: Claude Code runs `plugin/hooks/swarmstead-hook.mjs` for each lifecycle event (`async: true`). The script stamps the time and POSTs the raw payload to `/api/hook/claude`, with an 800 ms timeout. It never prints and always exits 0.
 2. **Adapter**: `ClaudeHookAdapter.translate()` turns the payload into normalized events (see `docs/EVENTS.md`). Inside a subagent, Claude Code adds `agent_id`/`agent_type`, so the event is attributed to `"<session>:<agent_id>"`.
 3. **Transcript tailer**: on the first hook from a session, the daemon starts tailing its `transcript_path` and the `<session>/subagents/agent-*.jsonl` files beside it. Assistant lines with `message.usage` become `usage` events, deduplicated by `message.id + requestId`. Lines written before tailing started are flagged `backfill`, so they only count toward today's totals.
 4. **Reorder buffer**: async hooks can arrive slightly out of order, so events wait 300 ms and are applied sorted by timestamp.
@@ -50,6 +50,14 @@ agent-village/
 | writing, thinking, tool, delegating, permission | own desk | next to the parent's desk |
 | waiting (>45 s) | coffee machine | — |
 | done / ended | walks out through the door | delivers its scroll, then leaves through the portal |
+
+## Runs, squads and the Arena
+
+- `World.joinRun` groups every subagent of one orchestrator into a **run** until it has been idle for 15 s. Each run keeps per-stage counters, median durations and a compact timeline: `[id, stage, start, end, outcome]`, capped at 1,000 agents.
+- `SUBAGENT_END` computes an **outcome**: clean, rough, failed, or lost (the orchestrator compacted within 60 s). The renderer animates it as a colored scroll. When the last agent returns, a `fanin` effect fires.
+- Workflow facts arrive late, from disk, as `agent.meta` events: the journal gives each agent's phase, and `moveStage` re-files it.
+- `WorldView.computeSquads` folds same-stage agents into squads when an orchestrator has more than 8 live subagents, or when it is in the arena. Agents with alerts always stay visible.
+- Detectors run per agent, then collapse 3 or more identical subagent alerts into one swarm alert on the orchestrator.
 
 ## Why these choices
 

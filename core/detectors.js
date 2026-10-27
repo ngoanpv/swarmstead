@@ -2,8 +2,13 @@
 // on a 1s tick. Each rule raises an alert keyed by (kind, subject); the alert
 // resolves itself when the condition clears. Alerts carry a `kind` plus
 // `params`; the UI turns them into words via core/i18n.js.
+//
+// Swarm-aware: when 3+ subagents of the same orchestrator trip the same rule
+// (e.g. 7 workflow agents stuck on permission prompts), they collapse into ONE
+// alert on the orchestrator instead of 7 toasts.
 
 import { STATUS, BUSY } from './state.js';
+import { median } from './util.js';
 
 export const DEFAULT_THRESHOLDS = {
   loopWarn: 3,             // same tool+input this many times in the window
@@ -16,14 +21,21 @@ export const DEFAULT_THRESHOLDS = {
   stallUsd: 0.5,           // …and this much spent since the last edit
   burnUsdPerMin: 1.0,      // 5-minute average
   dailyBudgetUsd: 0,       // 0 = disabled
+  runBudgetUsd: 0,         // per fan-out run / workflow, 0 = disabled
   contextWarn: 0.65,
   contextCrit: 0.8,
   permissionMs: 20_000,
   waitingMs: 3 * 60_000,
   collisionTtlMs: 10 * 60_000,
+  stragglerFactor: 3,      // running > 3× the stage's median duration…
+  stragglerMinMs: 2 * 60_000, // …and at least this long
+  sprawlTotal: 50,         // agents in one run before we say "that's a lot"
+  sprawlPerMin: 20,        // spawn rate
+  swarmGroup: 3,           // collapse identical subagent alerts at this count
 };
 
-const READ_ONLY_ROLE = /explor|review|research|plan|search|guide|audit|analy/i;
+const READ_ONLY_ROLE = /explor|review|research|plan|search|guide|audit|analy|refut|verif|classif|scan/i;
+const SWARMABLE = new Set(['loop', 'errorEcho', 'stall', 'context', 'permissionSub', 'straggler', 'exhausted']);
 
 export const SEVERITY_RANK = { info: 0, warn: 1, crit: 2 };
 
@@ -33,6 +45,7 @@ export class Detectors {
     this.alerts = new Map();   // key -> alert
     this.history = [];         // resolved alerts
     this.sticky = new Map();   // event-driven alerts with TTL: key -> expiresAt
+    this.spawns = [];          // recent spawn timestamps per parent, for sprawl
   }
 
   /** Called with the effects produced by World.apply, to turn one-shot facts into alerts. */
@@ -57,17 +70,18 @@ export class Detectors {
           this.raise(out, key, 'compactRisk', 'warn', a.id, now, { who: labelOf(a), kids: busyKids.length });
         }
       }
+      if (f.fx === 'handoff' && f.kind === 'delegate') {
+        this.spawns.push({ parent: f.from, ts: now });
+        if (this.spawns.length > 2000) this.spawns.splice(0, 1000);
+      }
     }
   }
 
   evaluate(world, now) {
     const out = [];
-    const seen = new Set();
     const t = this.t;
-    const mark = (key, kind, sev, agentId, params) => {
-      seen.add(key);
-      this.raise(out, key, kind, sev, agentId, now, params);
-    };
+    const cand = []; // { key, kind, sev, agentId, params, parentId? }
+    const add = (key, kind, sev, a, params) => cand.push({ key, kind, sev, agentId: a ? a.id : null, parentId: a?.parentId || null, params });
 
     for (const a of world.agents.values()) {
       if (!a.alive) continue;
@@ -80,65 +94,119 @@ export class Detectors {
       let maxKey = '', max = 0;
       for (const [k, c] of counts) if (c > max) { max = c; maxKey = k; }
       if (max >= t.loopWarn) {
-        const first = !this.alerts.has(`loop:${a.id}`);
-        mark(`loop:${a.id}`, 'loop', max >= t.loopCrit ? 'crit' : 'warn', a.id, {
-          who, times: max, call: maxKey.split('#')[0],
-        });
-        if (first) a.turn.loops++;
-      }
+        if (!this.alerts.has(`loop:${a.id}`) && !a._loopCounted) { a.turn.loops++; a._loopCounted = true; }
+        add(`loop:${a.id}`, 'loop', max >= t.loopCrit ? 'crit' : 'warn', a, { who, times: max, call: maxKey.split('#')[0] });
+      } else a._loopCounted = false;
 
       // 2. Error echo: the same failure message repeating.
       const errs = new Map();
       for (const e of a.recentErrors) if (now - e.ts < t.loopWindowMs) errs.set(e.sig, (errs.get(e.sig) || 0) + 1);
       for (const [sig, c] of errs) {
         if (c >= t.errorEcho) {
-          const key = `errorEcho:${a.id}`;
-          if (!this.alerts.has(key)) a.turn.errorEchoes++;
-          mark(key, 'errorEcho', 'warn', a.id, { who, times: c, error: sig.slice(0, 90) });
+          if (!a._echoCounted) { a.turn.errorEchoes++; a._echoCounted = true; }
+          add(`errorEcho:${a.id}`, 'errorEcho', 'warn', a, { who, times: c, error: sig.slice(0, 90) });
           break;
         }
       }
+      if (![...errs.values()].some((c) => c >= t.errorEcho)) a._echoCounted = false;
 
       // 3. Stall: spending without producing any edits.
       if (BUSY.has(a.status) && !READ_ONLY_ROLE.test(a.type) &&
           a.toolsSinceWrite >= t.stallTools && now - a.lastWriteTs > t.stallMs && a.costSinceWrite >= t.stallUsd) {
-        mark(`stall:${a.id}`, 'stall', 'warn', a.id, {
+        add(`stall:${a.id}`, 'stall', 'warn', a, {
           who, tools: a.toolsSinceWrite, minutes: Math.round((now - a.lastWriteTs) / 60_000), usd: a.costSinceWrite,
         });
       }
 
       // 4. Context window pressure.
       const pct = a.context.window ? a.context.used / a.context.window : 0;
-      if (pct >= t.contextWarn) {
-        mark(`context:${a.id}`, 'context', pct >= t.contextCrit ? 'crit' : 'warn', a.id, { who, pct: Math.round(pct * 100) });
-      }
+      if (pct >= t.contextWarn) add(`context:${a.id}`, 'context', pct >= t.contextCrit ? 'crit' : 'warn', a, { who, pct: Math.round(pct * 100) });
 
       // 5. Blocked on a permission prompt (silent killer for background subagents).
       if (a.status === STATUS.PERMISSION && a.permissionSince && now - a.permissionSince > t.permissionMs) {
         const sub = !!a.parentId;
-        mark(`permission:${a.id}`, sub ? 'permissionSub' : 'permission', sub ? 'crit' : 'warn', a.id, {
+        add(`permission:${a.id}`, sub ? 'permissionSub' : 'permission', sub ? 'crit' : 'warn', a, {
           who, seconds: Math.round((now - a.permissionSince) / 1000), tool: a.tool,
         });
       }
 
       // 6. Waiting for the human.
       if (!a.parentId && a.status === STATUS.WAITING && a.waitingSince && now - a.waitingSince > t.waitingMs) {
-        mark(`waiting:${a.id}`, 'waiting', 'info', a.id, { who, minutes: Math.round((now - a.waitingSince) / 60_000) });
+        add(`waiting:${a.id}`, 'waiting', 'info', a, { who, minutes: Math.round((now - a.waitingSince) / 60_000) });
       }
 
-      // mood drives the character's face/aura
+      // 7. Exhausted: rate limit / overloaded / billing.
+      if (a.status === STATUS.EXHAUSTED && a.exhausted) {
+        add(`exhausted:${a.id}`, 'exhausted', a.parentId ? 'warn' : 'crit', a, { who, reason: a.exhausted.reason });
+      }
+
+      // 8. Permissions bypassed: not a bug, but you should know.
+      if (a.mode === 'bypassPermissions') add(`bypass:${a.id}`, 'bypass', 'warn', a, { who });
+
+      // 9. Straggler in a swarm: much slower than its stage-mates.
+      const run = a.runId && world.runs.get(a.runId);
+      if (run && a.parentId) {
+        const st = run.stages.find((s) => s.name === a.stage);
+        if (st && st.durations.length >= 3) {
+          const med = median(st.durations), age = now - a.startedAt;
+          if (age > Math.max(t.stragglerMinMs, t.stragglerFactor * med)) {
+            add(`straggler:${a.id}`, 'straggler', 'warn', a, { who, stage: st.name, minutes: Math.round(age / 60_000), factor: Math.round(age / Math.max(1, med)) });
+          }
+        }
+      }
       a.mood = 'ok';
     }
 
-    // 7. Burn rate (global).
-    const burn = world.burnRate(now, 5);
-    if (t.burnUsdPerMin > 0 && burn >= t.burnUsdPerMin) {
-      mark('burn', 'burn', burn >= t.burnUsdPerMin * 3 ? 'crit' : 'warn', null, { rate: burn, limit: t.burnUsdPerMin });
+    // 10. Spawn sprawl and run budget, per run.
+    for (const run of world.runs.values()) {
+      if (run.endedAt) continue;
+      const parent = world.agents.get(run.parentId);
+      const perMin = this.spawns.filter((s) => s.parent === run.parentId && now - s.ts < 60_000).length;
+      if (run.total >= t.sprawlTotal || perMin >= t.sprawlPerMin) {
+        add(`sprawl:${run.id}`, 'sprawl', perMin >= t.sprawlPerMin ? 'warn' : 'info', parent, { who: labelOf(parent), total: run.total, perMin });
+      }
+      if (t.runBudgetUsd > 0 && run.cost >= t.runBudgetUsd) {
+        add(`runBudget:${run.id}`, 'runBudget', 'crit', parent, { who: labelOf(parent), spent: run.cost, budget: t.runBudgetUsd });
+      }
     }
 
-    // 8. Daily budget.
+    // 11. Burn rate (global).
+    const burn = world.burnRate(now, 5);
+    if (t.burnUsdPerMin > 0 && burn >= t.burnUsdPerMin) {
+      add('burn', 'burn', burn >= t.burnUsdPerMin * 3 ? 'crit' : 'warn', null, { rate: burn, limit: t.burnUsdPerMin });
+    }
+
+    // 12. Daily budget.
     if (t.dailyBudgetUsd > 0 && world.totals.cost >= t.dailyBudgetUsd) {
-      mark('budget', 'budget', 'crit', null, { spent: world.totals.cost, budget: t.dailyBudgetUsd });
+      add('budget', 'budget', 'crit', null, { spent: world.totals.cost, budget: t.dailyBudgetUsd });
+    }
+
+    // Collapse identical subagent alerts under one orchestrator.
+    const groups = new Map();
+    for (const c of cand) {
+      if (!c.parentId || !SWARMABLE.has(c.kind)) continue;
+      const g = `${c.kind}|${c.parentId}`;
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g).push(c);
+    }
+    const swallowed = new Set();
+    for (const [g, list] of groups) {
+      if (list.length < t.swarmGroup) continue;
+      const [kind, parentId] = g.split('|');
+      const parent = world.agents.get(parentId);
+      const sev = list.reduce((s, c) => (SEVERITY_RANK[c.sev] > SEVERITY_RANK[s] ? c.sev : s), 'info');
+      for (const c of list) swallowed.add(c);
+      cand.push({
+        key: `${kind}:swarm:${parentId}`, kind, sev, agentId: parentId, parentId: null,
+        params: { ...list[0].params, who: labelOf(parent), swarm: true, count: list.length, agents: list.map((c) => c.agentId) },
+      });
+    }
+
+    const seen = new Set();
+    for (const c of cand) {
+      if (swallowed.has(c)) continue;
+      seen.add(c.key);
+      this.raise(out, c.key, c.kind, c.sev, c.agentId, now, c.params);
     }
 
     // Sticky (event-driven) alerts stay until their TTL.
@@ -159,16 +227,21 @@ export class Detectors {
       }
     }
 
-    // Moods: worst active alert per agent.
+    // Moods: worst active alert per agent (swarm alerts mark every member).
+    const moodOf = (kind) => kind === 'loop' || kind === 'errorEcho' ? 'dizzy'
+      : kind === 'context' ? 'sleepy'
+      : kind === 'permission' || kind === 'permissionSub' ? 'blocked'
+      : kind === 'stall' || kind === 'straggler' ? 'stuck'
+      : kind === 'exhausted' ? 'exhausted'
+      : kind === 'collision' ? 'angry' : 'ok';
     for (const al of this.alerts.values()) {
-      const a = al.agentId && world.agents.get(al.agentId);
-      if (!a) continue;
-      const mood = al.kind === 'loop' || al.kind === 'errorEcho' ? 'dizzy'
-        : al.kind === 'context' ? 'sleepy'
-        : al.kind === 'permission' || al.kind === 'permissionSub' ? 'blocked'
-        : al.kind === 'stall' ? 'stuck'
-        : al.kind === 'collision' ? 'angry' : 'ok';
-      if (mood !== 'ok' && (a.mood === 'ok' || SEVERITY_RANK[al.severity] >= 2)) a.mood = mood;
+      const ids = al.params?.swarm ? al.params.agents : [al.agentId];
+      for (const id of ids || []) {
+        const a = id && world.agents.get(id);
+        if (!a) continue;
+        const mood = moodOf(al.kind);
+        if (mood !== 'ok' && (a.mood === 'ok' || SEVERITY_RANK[al.severity] >= 2)) a.mood = mood;
+      }
     }
     return out;
   }
@@ -199,7 +272,8 @@ export class Detectors {
 export function labelOf(a) {
   if (!a) return '?';
   if (a.label) return a.label;
-  return a.type === 'main' ? a.project : `${a.type}@${a.project}`;
+  if (a.teammate) return `${a.teammate}@${a.project}`;
+  return a.type === 'main' ? a.project + (a.worktree ? `:${a.worktree}` : '') : `${a.type}@${a.project}`;
 }
 
 /** Like labelOf, but tells two sessions of the same project apart. */

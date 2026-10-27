@@ -39,7 +39,18 @@ export const EV = Object.freeze({
   COMPACT_END: 'compact.end',
   USAGE: 'usage',                   // tokens/cost for one model response
   LIMITS: 'limits',                 // provider rate-limit / quota snapshot
+  MODEL_SWITCH: 'model.switch',     // { from, to }
+  WORKTREE: 'worktree',             // { action: 'create'|'remove'|'cwd', path, name }
+  TEAM: 'team',                     // { action: 'task.created'|'task.completed'|'join', team, teammate, subject }
+  NOTICE: 'notice',                 // { text, level } — informational, e.g. quota auto-resume
+  AGENT_META: 'agent.meta',         // late facts about an agent: { stage, workflow, title, parentId }
 });
+
+/** StopFailure error values that mean "the agent can't continue right now". */
+export const EXHAUSTION = new Set(['rate_limit', 'rate_limited', 'overloaded', 'billing_error', 'account_on_hold', 'quota_exceeded', 'usage_limit']);
+
+/** Optional fields any event may carry; the world copies them onto the agent. */
+export const AGENT_FIELDS = ['mode', 'effort', 'model', 'background', 'crons', 'team', 'teammate', 'stage', 'workflow'];
 
 export const CATEGORY = Object.freeze({
   READ: 'read',
@@ -58,7 +69,7 @@ const TOOL_CATEGORY = {
   Edit: CATEGORY.WRITE, MultiEdit: CATEGORY.WRITE, Write: CATEGORY.WRITE, NotebookEdit: CATEGORY.WRITE,
   Bash: CATEGORY.RUN, BashOutput: CATEGORY.RUN, KillShell: CATEGORY.RUN, PowerShell: CATEGORY.RUN,
   WebSearch: CATEGORY.WEB, WebFetch: CATEGORY.WEB,
-  Task: CATEGORY.DELEGATE, Agent: CATEGORY.DELEGATE,
+  Task: CATEGORY.DELEGATE, Agent: CATEGORY.DELEGATE, Workflow: CATEGORY.DELEGATE, SendMessage: CATEGORY.DELEGATE,
   TodoWrite: CATEGORY.PLAN, TaskCreate: CATEGORY.PLAN, TaskUpdate: CATEGORY.PLAN, ExitPlanMode: CATEGORY.PLAN,
   // Codex
   shell: CATEGORY.RUN, local_shell: CATEGORY.RUN, exec_command: CATEGORY.RUN, unified_exec: CATEGORY.RUN,

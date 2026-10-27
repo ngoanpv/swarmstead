@@ -1,10 +1,10 @@
-# 🏘 Agent Village
+# 🏘 Swarmstead
 
 **Watch your coding agents work as a living pixel village.** Every Claude Code session moves into the workshop as a little character. Subagents step out of a portal, carry scrolls back to their lead, and fight bug monsters when tests fail. Coins fly into a treasure chest as tokens are spent. When something goes wrong (a loop, a stuck permission prompt, context about to overflow, two agents editing the same file), you see it before it costs you.
 
 And the villagers **evolve**, but only through good habits: finished work, few loops, and spending less than their own average.
 
-![Agent Village](docs/images/village.png)
+![Swarmstead](docs/images/village.png)
 
 > Claude Code first. Codex CLI support is in **beta**. Local-only, zero runtime dependencies, MIT licensed.
 
@@ -21,6 +21,8 @@ Running agents in parallel creates new problems, and terminal scrollback hides m
 | Context fills up and auto-compacts while subagents report back | Their results get summarised away | An HP bar over each head, and a "compacted during handoff" warning |
 | Two sessions edit the same file | The last write wins and work disappears silently | Lightning between the two villagers, and a collision alert |
 | Cost is invisible until the bill arrives | `/cost` only shows one session | A live treasury, burn rate, cache-hit ratio, 5-hour block |
+| A workflow fans out to dozens of agents | `/workflows` shows counts per stage, nothing more | An **Arena** with one pad per stage, squads instead of crowds, stragglers called out, and a timeline |
+| Results come back and you can't tell which ones went wrong | One merged summary | Each report arrives as a scroll colored by how it went: clean, rough, failed, or maybe lost to compaction |
 | Waiting is boring | You tab away and forget the agent needs you | Villagers walk to the coffee machine when they're waiting for you |
 
 ## Quick start (Claude Code)
@@ -28,20 +30,20 @@ Running agents in parallel creates new problems, and terminal scrollback hides m
 Requires **Node 18+**. No `npm install` is needed to run it.
 
 ```bash
-git clone https://github.com/your-org/agent-village
-cd agent-village
-node bin/agent-village.js start --open      # opens http://127.0.0.1:4317/web/
+git clone https://github.com/your-org/swarmstead
+cd swarmstead
+node bin/swarmstead.js start --open      # opens http://127.0.0.1:4317/web/
 ```
 
 Then connect Claude Code, using **one** of these:
 
 ```bash
 # A) As a Claude Code plugin (recommended)
-claude plugin marketplace add your-org/agent-village
-claude plugin install agent-village@agent-village
+claude plugin marketplace add your-org/swarmstead
+claude plugin install swarmstead@swarmstead
 
 # B) Or write the hooks into ~/.claude/settings.json yourself
-node bin/agent-village.js install claude          # add --project for .claude/settings.local.json
+node bin/swarmstead.js install claude          # add --project for .claude/settings.local.json
 ```
 
 Start a new Claude Code session. A new villager walks in through the door.
@@ -49,20 +51,20 @@ Start a new Claude Code session. A new villager walks in through the door.
 Useful extras:
 
 ```bash
-node bin/agent-village.js doctor     # check every part of the setup
-node bin/agent-village.js ping       # send a fake mini-session to see the pipeline work
-node bin/agent-village.js uninstall claude
+node bin/swarmstead.js doctor     # check every part of the setup
+node bin/swarmstead.js ping       # send a fake mini-session to see the pipeline work
+node bin/swarmstead.js uninstall claude
 ```
 
-**Just want to look?** Open `http://127.0.0.1:4317/web/?demo` to see a scripted day in the village. You can also build the single-file demo with `npm i --no-save esbuild && npm run build:demo`, then open `dist/agent-village-demo.html`. Add `&hour=22` to preview night mode and `&lang=vi` for Vietnamese.
+**Just want to look?** Open `http://127.0.0.1:4317/web/?demo` to see a scripted day in the village. You can also build the single-file demo with `npm i --no-save esbuild && npm run build:demo`, then open `dist/swarmstead-demo.html`. Add `&hour=22` to preview night mode and `&lang=vi` for Vietnamese.
 
 ### Codex CLI (beta)
 
 ```bash
-node bin/agent-village.js install codex     # writes ~/.codex/hooks.json
+node bin/swarmstead.js install codex     # writes ~/.codex/hooks.json
 ```
 
-Codex only runs hooks you have trusted. Open Codex, run `/hooks`, and trust the agent-village entries. Token usage and rate limits come from `~/.codex/sessions/**/rollout-*.jsonl`.
+Codex only runs hooks you have trusted. Open Codex, run `/hooks`, and trust the swarmstead entries. Token usage and rate limits come from `~/.codex/sessions/**/rollout-*.jsonl`.
 
 ## What you're looking at
 
@@ -73,7 +75,18 @@ Codex only runs hooks you have trusted. Open Codex, run `/hooks`, and trust the 
 | Villager at its **desk** | Writing code or thinking. A typing glow means edits are happening. |
 | **Bookshelf** / **whiteboard** / **globe** / **server rack** | Reading or searching / planning / web / running commands |
 | **Portal** on the rug | Subagents arrive and leave here |
-| Flying **scroll** (gold → green) | A handoff: task delegated → report returned |
+| Flying **scroll**, gold | A task handed to a subagent |
+| Subagent walks back, hands over a **scroll** | Its report. Several returning at once form a queue; the orchestrator reads each one. |
+| Scroll color | 🟩 clean · 🟨 rough (loops, failed runs, denials) · 🟥 failed (open bug, API error) · 🟪 maybe lost (orchestrator compacted while it came back) |
+| 📜 `3/5` over an orchestrator | Reports received out of all delegated in this fan-out |
+| Scrolls spiral into a glowing **tome** | Fan-in: every subagent of the run has reported back |
+| `×N` after a name, two shadow copies | A **squad**: N same-stage agents folded together (agents with alerts always step out) |
+| Faint afterimages | Several tool calls running in parallel |
+| Small gray orbs at the feet | Background tasks still running after the turn |
+| Badge left of the name | Permission mode: `P` plan · `E` accept edits · `A` auto · `D` don't ask · blinking `!` bypass permissions |
+| Slumped villager with `!!` | Rate limit, overload or billing stop ("out of stamina") |
+| Green desk plate | The session works in a git worktree (named on the plate) |
+| Gold dotted rope and flag | Agent-team teammates tied to their lead |
 | **Red slime** | A test or build failed. It's defeated when the same kind of command passes again. |
 | **Coins → chest** | Spend, priced per model, including cache reads and writes |
 | **HP bar** over the head | Context remaining. Yellow means you should plan a compaction; red means compaction is imminent. |
@@ -82,9 +95,31 @@ Codex only runs hooks you have trusted. Open Codex, run `/hooks`, and trust the 
 | **Coffee machine** | The agent has been waiting for you for over 45 seconds |
 | Room lighting | Follows your local time; lamps and laptops glow at night |
 
+## Big runs: squads, the Arena and the Timeline
+
+Claude Code workflows can launch hundreds of agents (16 at a time by default). Swarmstead changes how it draws them as the swarm grows:
+
+| Agents under one orchestrator | View |
+|---|---|
+| up to 8 | every subagent is its own villager |
+| more than 8 | same-stage agents fold into **squads** (`×N`); the side panel shows one row per stage |
+| a run of 12+ | the view switches to the **Arena** automatically: one pad per stage along a path, a progress ring, a pile of finished reports and tombstones for failures, the orchestrator on a dais with its inbox, and the final tome at the end |
+
+![The Arena during a 35-agent workflow](docs/images/arena.png)
+
+The **Timeline** tab draws one swimlane per stage, with a bar per agent colored by outcome. Stragglers still running at 3× their stage's median get a red outline. Use the `Auto / Room / Arena` switch under the stage to pick a view yourself.
+
+![Timeline of a workflow run](docs/images/timeline.png)
+
+How a run is recognised:
+- Every subagent launched by the same orchestrator joins its current **run** until 15 s pass with nothing running.
+- For workflows, the run name comes from the `Workflow` tool result and `<session>/workflows/scripts/<name>-<runId>.js`.
+- Each agent's **phase** (stage) comes from `<session>/subagents/workflows/<runId>/journal.jsonl`.
+- Plain fan-outs use the subagent type as the stage.
+
 ## Issue detectors
 
-All of these run locally in `core/detectors.js`, and every threshold can be changed in `~/.agent-village/config.json`.
+All of these run locally in `core/detectors.js`, and every threshold can be changed in `~/.swarmstead/config.json`.
 
 | Detector | Fires when (defaults) | Severity |
 |---|---|---|
@@ -99,12 +134,19 @@ All of these run locally in `core/detectors.js`, and every threshold can be chan
 | `budget` | Today's spend ≥ `dailyBudgetUsd` (off by default) | crit |
 | `collision` | Two unrelated sessions edit the same file within 10 min | crit |
 | `compactRisk` | Auto-compaction while subagents are running or just reported back | warn |
+| `exhausted` | Turn stopped by `rate_limit`, `overloaded`, `billing_error` or `account_on_hold` | crit (warn for subagents) |
+| `bypass` | Session running with `bypassPermissions` | warn |
+| `straggler` | A run agent has been working >3× its stage's median and >2 min | warn |
+| `sprawl` | A run reaches 50 agents, or spawns ≥20 per minute | info / warn |
+| `runBudget` | A run's cost ≥ `runBudgetUsd` (off by default) | crit |
+
+**Swarm collapse:** when 3 or more subagents of one orchestrator trip the same rule, you get one alert ("7 subagents of payments are stuck on permission prompts") instead of seven.
 
 Every alert comes with a one-line hint on what to do next.
 
 ## Evolution
 
-Each **agent identity** (provider + project + agent type, e.g. `claude:shop-api:code-reviewer`) owns a *familiar* that persists across sessions in `~/.agent-village/roster.json`.
+Each **agent identity** (provider + project + agent type, e.g. `claude:shop-api:code-reviewer`) owns a *familiar* that persists across sessions in `~/.swarmstead/roster.json`.
 
 ```
 xp per finished turn = 10 × work × quality × thrift × cache  +  15 × bugs slain  +  clean bonus
@@ -125,17 +167,40 @@ xp per finished turn = 10 × work × quality × thrift × cache  +  15 × bugs s
 | web & tools | Bunny | Hopper → Scoutbun → Moonhare / Treasure Hare → Star Strider / Comet Hare |
 | delegating | Cat | Kitten → Captain Cat → Zen Sphinx / Merchant Lion → Celestial Sphinx / Sun King |
 
+**Swarms can't farm XP.** A subagent's XP is multiplied by √(4 / swarm size) once a run has more than 4 agents. The orchestrator instead gets one **fan-in bonus** when the whole run has reported back: 20 × √agents (capped at 10) × the run's success rate.
+
 Master requires **Focus ≥ 55**, so a loopy agent stays Adept forever. Legend requires a **10-turn clean streak**. A clean streak also makes a familiar **shiny**. Loops leave a visible **glitch** that heals with clean turns. Details and tuning are in [docs/EVOLUTION.md](docs/EVOLUTION.md).
 
 ![Sprites](docs/images/sprites.png)
 
 Every sprite is generated procedurally from a genome (no image assets), so the project needs no paid tilesets and every familiar looks different.
 
+## Claude Code coverage
+
+| Signal | Source | Shown as |
+|---|---|---|
+| Session start / resume / fork / end, prompts, turn end | `SessionStart` `SessionEnd` `UserPromptSubmit` `Stop` | arrival at the door, "RESUMED"/"FORKED", ✓ bubble, XP |
+| Every tool call, success or failure, interrupts | `PreToolUse` `PostToolUse` `PostToolUseFailure` | walking to stations, bug monsters, loop/error detectors |
+| Parallel tool calls | overlapping `PreToolUse` | afterimages, `×N` |
+| Permission prompts and denials | `PermissionRequest` `Notification:permission_prompt` `PermissionDenied` | `!` bubble, raised hand, ✕ bubble |
+| Waiting for you, MCP elicitation | `Notification:idle_prompt` `Elicitation` | `?` bubble, coffee machine |
+| API failures | `StopFailure` | "out of stamina" |
+| Subagents, nested subagents | `SubagentStart` / `SubagentStop` with `agent_id`, plus `agent-*.meta.json` | portal, scrolls, queue, outcomes |
+| Workflows | `Workflow` tool result, workflow journal and scripts on disk | Arena, stages, timeline |
+| Agent teams | `TeammateIdle` `TaskCreated` `TaskCompleted`, `~/.claude/teams/*/config.json` | teammates stay in the room; messages are handoffs |
+| Compaction | `PreCompact` `PostCompact` | sleeping villager, `compactRisk` |
+| Model switches, permission mode, effort | `PostModelSwitch`, `permission_mode`, `effort.level` on every payload | floater, name badge, side panel |
+| Background tasks, crons | `background_tasks` `session_crons` on `Stop` | orbs at the feet |
+| Worktrees | worktree paths in `cwd` (`.claude/worktrees/<name>`), `CwdChanged` | green desk plate, no false collisions |
+| Tokens, cost, model, context, thinking | transcripts (deduplicated by message id), workflow agent transcripts | coins, HP bar, totals |
+
+Swarmstead **never** registers `WorktreeCreate`, `WorktreeRemove` or `PreModelSwitch`. Registering a `WorktreeCreate` hook replaces Claude Code's own git-worktree creation, and the other two can change behaviour too, so `npm test` checks that they stay out.
+
 ## How it works
 
 ```mermaid
 flowchart LR
-  CC[Claude Code] -- async hooks --> H[agent-village-hook.mjs]
+  CC[Claude Code] -- async hooks --> H[swarmstead-hook.mjs]
   CX[Codex CLI] -- hooks.json --> H
   H -- POST /api/hook --> D[daemon :4317]
   T[(transcripts / rollouts)] -- tail --> D
@@ -152,7 +217,7 @@ More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The event schema and how t
 
 ## Configuration
 
-`~/.agent-village/config.json` (every key is optional):
+`~/.swarmstead/config.json` (every key is optional):
 
 ```json
 {
@@ -170,13 +235,13 @@ Costs are **estimates** computed from public list prices (`core/pricing.js`, che
 
 - Everything stays on your machine. The daemon binds to `127.0.0.1`, rejects cross-origin POSTs and foreign `Host` headers (DNS rebinding), and serves only `web/` and `core/`.
 - The state holds **summaries only**: file paths, the first 60 characters of a command, a search query. File contents, diffs, prompts and tool output are never stored. Use `"capture": "minimal"` to keep even less.
-- An event log is written to `~/.agent-village/events/` so you can replay sessions. Turn it off with `"logEvents": false`.
+- An event log is written to `~/.swarmstead/events/` so you can replay sessions. Turn it off with `"logEvents": false`.
 
 ## Roadmap
 
 - [ ] Replay mode: scrub through a past day from the event log
-- [ ] Agent teams: visualise teammate messaging (`TeammateIdle`, task board)
-- [ ] Worktree awareness: desks grouped by worktree, so collisions are recognised as safe when worktrees differ
+- [ ] Live workflow progress from the SDK's `task_progress` stream (queued agents, retries)
+- [ ] Split-pane agent-team teammates (separate sessions) linked to their lead
 - [ ] Per-turn "cost per merged change" using git hooks
 - [ ] VS Code panel and menubar mini-village
 - [ ] Gemini CLI / OpenCode adapters
@@ -188,18 +253,20 @@ PRs are welcome, especially new detectors, adapters, sprites and translations. S
 
 ## Credits & license
 
-MIT © Agent Village contributors. Fonts: [Pixelify Sans](https://github.com/eifetx/Pixelify-Sans) and [Silkscreen](https://kottke.org/plus/type/silkscreen/), both under the SIL Open Font License (see `web/fonts/`). Inspired by the community's pixel-office and observability experiments around Claude Code.
+MIT © Swarmstead contributors. Fonts: [Pixelify Sans](https://github.com/eifetx/Pixelify-Sans) and [Silkscreen](https://kottke.org/plus/type/silkscreen/), both under the SIL Open Font License (see `web/fonts/`). Inspired by the community's pixel-office and observability experiments around Claude Code.
 
 ---
 
 ### 🇻🇳 Tóm tắt tiếng Việt
 
-**Agent Village** biến các phiên Claude Code (và Codex, bản beta) thành một ngôi làng pixel sống động:
+**Swarmstead** biến các phiên Claude Code (và Codex, bản beta) thành một ngôi làng pixel sống động:
 
 - Mỗi agent là một nhân vật. Subagent bước ra từ cổng phép, làm việc, rồi mang cuộn giấy về báo cáo cho agent chính.
 - Test fail thì quái vật xuất hiện. Token tiêu đến đâu, đồng xu bay vào rương đến đó.
 - Hệ thống tự phát hiện: lặp vòng, kẹt chờ duyệt quyền (nhất là subagent chạy nền), context sắp đầy, hai agent sửa cùng một file, tốc độ đốt tiền cao.
 - **Tiến hoá nhân vật**: XP chỉ đến từ lượt làm việc đã hoàn thành, tính theo khối lượng × chất lượng × tiết kiệm × cache. Thói quen làm việc quyết định loài: đọc → Cú, viết → Cáo, chạy lệnh → Robot, web → Thỏ, giao việc → Mèo.
 - Lặp vòng làm nhân vật bị "glitch". Mười lượt sạch liên tiếp sẽ thành **SHINY**.
+- Khi subagent xong việc, nó đi về bàn agent điều phối, xếp hàng và trao cuộn giấy. Màu cuộn giấy cho biết kết quả: xanh là sạch, vàng là trục trặc, đỏ là thất bại, tím là có thể mất do nén context. Khi đủ báo cáo, các cuộn giấy gộp thành một cuốn sách phát sáng.
+- Workflow lớn (hàng chục đến hàng trăm agent) chuyển sang **Đấu trường**: mỗi giai đoạn một bệ, agent cùng giai đoạn gộp thành đội ×N, và tab **Dòng thời gian** chỉ ra agent chậm bất thường.
 
-Chạy nhanh: `node bin/agent-village.js start --open`, sau đó `node bin/agent-village.js install claude`. Thêm `?demo&lang=vi` để xem bản demo tiếng Việt.
+Chạy nhanh: `node bin/swarmstead.js start --open`, sau đó `node bin/swarmstead.js install claude`. Thêm `?demo&lang=vi` để xem bản demo tiếng Việt.

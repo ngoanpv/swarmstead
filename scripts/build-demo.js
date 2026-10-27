@@ -1,4 +1,4 @@
-// Build dist/agent-village-demo.html: one self-contained file (JS bundled,
+// Build dist/swarmstead-demo.html: one self-contained file (JS bundled,
 // fonts inlined) that runs the demo anywhere — GitHub Pages, a file:// double
 // click, or an iframe. The daemon does NOT need this; it serves web/ directly.
 //
@@ -28,10 +28,10 @@ html = html.replace(/url\('\.\/fonts\/([^']+)'\)/g, (_, f) => {
   const b64 = fs.readFileSync(path.join(ROOT, 'web/fonts', f)).toString('base64');
   return `url(data:font/woff2;base64,${b64})`;
 });
-html = html.replace('<script type="module" src="./main.js"></script>', () => `<script>window.__AV_DEMO__ = true;</script>\n<script type="module">\n${js.replace(/<\/script/g, '<\\/script')}\n</script>`);
-html = html.replace('<title>Agent Village</title>', '<title>Agent Village — demo</title>');
+html = html.replace('<script type="module" src="./main.js"></script>', () => `<script>window.__SWARMSTEAD_DEMO__ = true;</script>\n<script type="module">\n${js.replace(/<\/script/g, '<\\/script')}\n</script>`);
+html = html.replace('<title>Swarmstead</title>', '<title>Swarmstead — demo</title>');
 
 fs.mkdirSync(path.join(ROOT, 'dist'), { recursive: true });
-const file = path.join(ROOT, 'dist/agent-village-demo.html');
+const file = path.join(ROOT, 'dist/swarmstead-demo.html');
 fs.writeFileSync(file, html);
 console.log(`wrote ${path.relative(ROOT, file)} (${(html.length / 1024).toFixed(0)} KB)`);

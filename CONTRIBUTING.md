@@ -5,9 +5,9 @@ Thanks for wanting to make the village better! 🏘
 ## Setup
 
 ```bash
-git clone https://github.com/your-org/agent-village && cd agent-village
+git clone https://github.com/your-org/swarmstead && cd swarmstead
 npm test                                   # node:test, no dependencies
-node bin/agent-village.js start --open     # live village
+node bin/swarmstead.js start --open     # live village
 open http://127.0.0.1:4317/web/?demo       # demo; add &hour=22 for night, &lang=vi
 ```
 
@@ -20,6 +20,10 @@ There's no build step: edit files in `web/` or `core/` and reload.
 - **Sprites** (`web/render/sprites.js`): new species, accessories or poses. Use the `scripts/spritesheet.html` page to preview.
 - **Translations**: copy `en` in `core/i18n.js`.
 - **Scenery** (`web/render/scene.js`): new stations, seasonal decorations.
+
+## Hooks
+
+The list of hook events lives in `server/adapters/claude-hooks.js` (`CLAUDE_HOOK_EVENTS`). After changing it, run `npm run gen:hooks` to regenerate `plugin/hooks/hooks.json`; a test keeps them in sync. Never add an event listed in `NEVER_REGISTER`: those hooks change Claude Code's behaviour just by being present.
 
 ## Rules of the road
 

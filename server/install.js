@@ -9,8 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { CLAUDE_HOOK_EVENTS } from './adapters/claude-hooks.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-export const HOOK_SCRIPT = path.join(ROOT, 'plugin', 'hooks', 'agent-village-hook.mjs');
-export const HOOK_MARKER = 'agent-village-hook.mjs';
+export const HOOK_SCRIPT = path.join(ROOT, 'plugin', 'hooks', 'swarmstead-hook.mjs');
+export const HOOK_MARKER = 'swarmstead-hook.mjs';
 
 const TOOL_EVENTS = new Set(['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'PermissionDenied']);
 export const CODEX_HOOK_EVENTS = [
@@ -33,7 +33,7 @@ function readJsonFile(file) {
 
 function backupAndWrite(file, data) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.agent-village.bak`);
+  if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.swarmstead.bak`);
   fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n');
 }
 

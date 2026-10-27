@@ -1,5 +1,5 @@
 // Demo simulator: a scripted but varied day in the village, so anyone can see
-// what Agent Village does without running an agent. It drives the real core
+// what Swarmstead does without running an agent. It drives the real core
 // engine with the same normalized events the daemon produces.
 
 import { Village } from '../../core/engine.js';
@@ -11,11 +11,22 @@ const PROJECTS = {
   shop: '/home/dev/work/shop-api',
   web: '/home/dev/work/web-app',
   docs: '/home/dev/work/docs-site',
+  pay: '/home/dev/work/payments',
 };
+
+// A Claude Code workflow ("ultracode"): stages run as a pipeline, at most 16 agents at once.
+const WORKFLOW = [
+  { stage: 'Scan', type: 'scanner', n: 6, ms: [5000, 9000] },
+  { stage: 'Classify', type: 'classifier', n: 8, ms: [4000, 8000] },
+  { stage: 'Investigate', type: 'investigator', n: 12, ms: [8000, 16000] },
+  { stage: 'Refute', type: 'refuter', n: 5, ms: [6000, 11000] },
+  { stage: 'Fix', type: 'fixer', n: 3, ms: [9000, 14000] },
+  { stage: 'Synthesize', type: 'synthesizer', n: 1, ms: [7000, 9000] },
+];
 
 export class DemoSim {
   constructor({ onFx, onSnapshot, onRoster, speed = 1 }) {
-    this.village = new Village({ xpMultiplier: 2, thresholds: { burnUsdPerMin: 1.6, permissionMs: 15_000, waitingMs: 60_000 } });
+    this.village = new Village({ xpMultiplier: 2, thresholds: { burnUsdPerMin: 2.5, permissionMs: 15_000, waitingMs: 60_000, stragglerMinMs: 25_000, sprawlTotal: 30 } });
     this.onFx = onFx; this.onSnapshot = onSnapshot; this.onRoster = onRoster;
     this.speed = speed;
     this.r = rng(42);
@@ -33,6 +44,7 @@ export class DemoSim {
     this.loop(() => this.webApp(), 2600);
     this.loop(() => this.docs(), 6000);
     this.loop(() => this.twin(), 26000);
+    this.loop(() => this.workflow(), this.workflowDelay ?? 40000);
   }
 
   setSpeed(s) { this.speed = s; }
@@ -56,14 +68,15 @@ export class DemoSim {
 
   // ------------------------------------------------------------- building blocks
 
-  agent(sessionId, cwd, provider, model, agentType = null, parentId = null) {
+  agent(sessionId, cwd, provider, model, agentType = null, parentId = null, extra = {}) {
     const id = parentId ? `${sessionId}:${agentType}-${Math.floor(this.r() * 1e6).toString(36)}` : sessionId;
-    return { sessionId, agentId: id, cwd, provider, model, agentType, parentId };
+    return { sessionId, agentId: id, cwd, provider, model, agentType, parentId, ...extra };
   }
 
   base(a) {
     const b = { provider: a.provider, sessionId: a.sessionId, agentId: a.agentId, cwd: a.cwd };
     if (a.parentId) { b.parentId = a.parentId; b.agentType = a.agentType; }
+    for (const k of ['mode', 'effort', 'stage', 'workflow']) if (a[k]) b[k] = a[k];
     return b;
   }
 
@@ -86,6 +99,15 @@ export class DemoSim {
     this.emit({ ...this.base(a), kind: EV.TOOL_START, tool, toolUseId: id, category: categorize(tool), detail: detail || shortName(file) || command.slice(0, 50), file, command, inputHash });
     await this.sleep(this.jitter(ms));
     this.emit({ ...this.base(a), kind: EV.TOOL_END, tool, toolUseId: id, category: categorize(tool), file, command, ok, error: ok ? undefined : error });
+  }
+
+  /** Several tool calls in flight at once (Claude Code runs independent reads in parallel). */
+  async parallel(a, files) {
+    await this.usage(a, 300);
+    const ids = files.map(() => 't' + Math.floor(this.r() * 1e9).toString(36));
+    files.forEach((f, i) => this.emit({ ...this.base(a), kind: EV.TOOL_START, tool: 'Read', toolUseId: ids[i], category: 'read', detail: shortName(`${a.cwd}/${f}`), file: `${a.cwd}/${f}`, inputHash: hash32(f) }));
+    await this.sleep(this.jitter(1400));
+    files.forEach((f, i) => this.emit({ ...this.base(a), kind: EV.TOOL_END, tool: 'Read', toolUseId: ids[i], category: 'read', ok: true }));
   }
 
   async read(a, files) { for (const f of files) await this.tool(a, 'Read', { file: `${a.cwd}/${f}`, ms: 500 }); }
@@ -112,9 +134,12 @@ export class DemoSim {
     const lead = this.agent('lead-7f3a', PROJECTS.shop, 'claude', 'claude-opus-5-5');
     if (!this.leadStarted) { this.emit({ ...this.base(lead), kind: EV.SESSION_START }); this.leadStarted = true; this.leadRuns = 0; }
     this.leadRuns++;
+    lead.effort = 'xhigh';
+    lead.mode = 'plan';
     this.emit({ ...this.base(lead), kind: EV.PROMPT });
-    await this.tool(lead, 'TodoWrite', { detail: 'plan: checkout refactor', ms: 600 });
-    await this.read(lead, ['src/checkout/cart.ts', 'src/checkout/pricing.ts', 'src/routes.ts']);
+    await this.tool(lead, 'TodoWrite', { detail: 'plan: checkout refactor', ms: 1600 });
+    lead.mode = 'default';
+    await this.parallel(lead, ['src/checkout/cart.ts', 'src/checkout/pricing.ts', 'src/routes.ts']);
     const reviewer = this.delegate(lead, 'code-reviewer', 'review pricing rules', async (sub) => {
       for (const p of ['discount', 'TODO', 'roundCents', 'currency']) await this.tool(sub, 'Grep', { detail: p, ms: 500, think: 900 });
       await this.read(sub, ['src/checkout/pricing.ts', 'test/pricing.test.ts']);
@@ -140,15 +165,19 @@ export class DemoSim {
     }
     await this.edit(lead, 'src/checkout/pricing.ts');
     await this.edit(lead, 'src/routes.ts');
+    if (this.leadRuns % 2 === 0) {
+      this.emit({ ...this.base(lead), kind: EV.MODEL_SWITCH, from: lead.model, to: 'claude-sonnet-5-5' });
+      lead.model = 'claude-sonnet-5-5';
+    } else lead.model = 'claude-opus-5-5';
     await this.tool(lead, 'Bash', { command: 'npm test', ms: 3000 });
     await this.usage(lead, 900);
-    this.emit({ ...this.base(lead), kind: EV.TURN_END });
+    this.emit({ ...this.base(lead), kind: EV.TURN_END, background: this.leadRuns % 2 ? 2 : 0 });
     this.emit({ ...this.base(lead), kind: EV.WAITING });
     await this.sleep(this.jitter(9000));
   }
 
   async webApp() {
-    const a = this.agent('web-19c2', PROJECTS.web, 'claude', 'claude-sonnet-5-5');
+    const a = this.agent('web-19c2', PROJECTS.web, 'claude', 'claude-sonnet-5-5', null, null, { mode: 'acceptEdits', effort: 'high' });
     if (!this.webStarted) { this.emit({ ...this.base(a), kind: EV.SESSION_START }); this.webStarted = true; this.webRuns = 0; }
     this.webRuns++;
     this.emit({ ...this.base(a), kind: EV.PROMPT });
@@ -166,6 +195,13 @@ export class DemoSim {
       this.emit({ ...this.base(a), kind: EV.PERMISSION, tool: 'Bash', detail: 'npm install framer-motion' });
       await this.sleep(22_000);
       await this.tool(a, 'Bash', { command: 'npm install framer-motion', ms: 2500, think: 100 });
+    }
+    if (this.webRuns % 3 === 2) {
+      // The plan ran out of headroom mid-turn.
+      await this.usage(a, 300);
+      this.emit({ ...this.base(a), kind: EV.TURN_END, reason: 'rate_limit' });
+      await this.sleep(20_000);
+      return;
     }
     await this.tool(a, 'Bash', { command: 'npm run build', ms: 3200 });
     await this.usage(a, 700);
@@ -190,7 +226,10 @@ export class DemoSim {
 
   async twin() {
     // A second Claude session opened on the same repo, editing the same file → collision.
-    const a = this.agent('web-twin-55e', PROJECTS.web, 'claude', 'claude-sonnet-5-5');
+    this.twinRuns = (this.twinRuns || 0) + 1;
+    // odd runs: same working copy (collision!); even runs: its own worktree, sandboxed with bypass
+    const inTree = this.twinRuns % 2 === 0;
+    const a = this.agent('web-twin-55e', inTree ? `${PROJECTS.web}/.claude/worktrees/fix-cart` : PROJECTS.web, 'claude', 'claude-sonnet-5-5', null, null, inTree ? { mode: 'bypassPermissions' } : {});
     this.emit({ ...this.base(a), kind: EV.SESSION_START });
     this.emit({ ...this.base(a), kind: EV.PROMPT });
     await this.read(a, ['src/App.tsx']);
@@ -204,6 +243,61 @@ export class DemoSim {
     await this.sleep(this.jitter(70_000));
   }
 }
+
+DemoSim.prototype.workflow = async function workflow() {
+  const lead = this.agent('pay-3d1', PROJECTS.pay, 'claude', 'claude-opus-5-5', null, null, { effort: 'high', mode: 'auto' });
+  if (!this.payStarted) { this.emit({ ...this.base(lead), kind: EV.SESSION_START }); this.payStarted = true; this.payRuns = 0; }
+  this.payRuns++;
+  this.emit({ ...this.base(lead), kind: EV.PROMPT });
+  await this.tool(lead, 'Read', { file: `${lead.cwd}/src/ledger/settle.ts`, ms: 700 });
+  await this.tool(lead, 'TodoWrite', { detail: 'workflow: audit-payments', ms: 900 });
+  await this.usage(lead, 1800);
+  const cap = 16;
+  let live = 0;
+  const waitSlot = async () => { while (live >= cap) await this.sleep(300); live++; };
+  let n = 0;
+  for (const st of WORKFLOW) {
+    const jobs = [];
+    for (let i = 0; i < st.n; i++) {
+      await waitSlot();
+      n++;
+      const sub = this.agent(lead.sessionId, lead.cwd, 'claude', st.type === 'synthesizer' ? 'claude-opus-5-5' : 'claude-haiku-5-5', st.type, lead.agentId, { stage: st.stage, workflow: 'audit-payments' });
+      this.emit({ ...this.base(sub), kind: EV.SUBAGENT_START, detail: `${st.stage} #${i + 1}` });
+      const straggler = st.stage === 'Investigate' && i === 3;
+      const stuck = st.stage === 'Investigate' && i === 7 && this.payRuns % 2 === 1;
+      const fails = (st.stage === 'Fix' && i === 1) || (st.stage === 'Investigate' && i === 10);
+      const loopy = st.stage === 'Classify' && i === 2;
+      jobs.push((async () => {
+        const dur = st.ms[0] + this.r() * (st.ms[1] - st.ms[0]);
+        const steps = 2 + Math.floor(this.r() * 3);
+        for (let k = 0; k < steps; k++) {
+          const kind = st.stage === 'Fix' ? (k % 2 ? 'Edit' : 'Bash') : k % 3 === 2 ? 'Grep' : 'Read';
+          const opts = kind === 'Bash' ? { command: 'npm test -- ledger', ms: dur / steps * 0.6, ok: !(fails && k === steps - 1), error: 'FAIL ledger.test.ts › settles refunds' }
+            : kind === 'Edit' ? { file: `${sub.cwd}/src/ledger/refund-${i}.ts`, ms: dur / steps * 0.6 }
+            : { file: `${sub.cwd}/src/ledger/part-${(i * 7 + k) % 23}.ts`, detail: kind === 'Grep' ? 'settle(' : '', ms: dur / steps * 0.6, hash: loopy ? 4242 : undefined };
+          await this.tool(sub, loopy && k < 4 ? 'Grep' : kind, { ...opts, think: dur / steps * 0.3 });
+          if (stuck && k === 0) {
+            this.emit({ ...this.base(sub), kind: EV.PERMISSION, tool: 'Bash', detail: 'psql -c "select …"' });
+            await this.sleep(30_000);
+          }
+        }
+        if (loopy) for (let k = 0; k < 3; k++) await this.tool(sub, 'Grep', { detail: 'settle(', hash: 4242, ms: 300, think: 300 });
+        if (straggler) await this.sleep(45_000);
+        if (fails && st.stage === 'Investigate') this.emit({ ...this.base(sub), kind: EV.TURN_END, reason: 'overloaded' });
+        await this.usage(sub, 900);
+        this.emit({ ...this.base(sub), kind: EV.SUBAGENT_END });
+        live--;
+      })());
+    }
+    await Promise.all(jobs); // pipeline: the next stage starts when this one is done
+    await this.usage(lead, 400);
+  }
+  await this.tool(lead, 'Write', { file: `${lead.cwd}/AUDIT.md`, ms: 1500 });
+  await this.usage(lead, 2500);
+  this.emit({ ...this.base(lead), kind: EV.TURN_END });
+  this.emit({ ...this.base(lead), kind: EV.WAITING });
+  await this.sleep(this.jitter(150_000));
+};
 
 function shortName(f) { return f ? f.split('/').slice(-2).join('/') : ''; }
 

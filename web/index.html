@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agent Village</title>
+<title>Swarmstead</title>
 <meta name="description" content="Your coding agents as a living pixel village: handoffs, cost, loops, stuck permissions, context pressure, and familiars that evolve with good habits.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' shape-rendering='crispEdges'%3E%3Crect x='4' y='2' width='8' height='8' fill='%23f08a3e'/%3E%3Crect x='3' y='0' width='2' height='3' fill='%23f08a3e'/%3E%3Crect x='11' y='0' width='2' height='3' fill='%23f08a3e'/%3E%3Crect x='5' y='5' width='2' height='2' fill='%231b1a2b'/%3E%3Crect x='9' y='5' width='2' height='2' fill='%231b1a2b'/%3E%3Crect x='5' y='10' width='6' height='4' fill='%23f08a3e'/%3E%3Crect x='6' y='11' width='4' height='2' fill='%23fff1d0'/%3E%3C/svg%3E">
 <style>
@@ -80,6 +80,7 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 12px; pa
 .toasts { position: fixed; right: calc(16px + env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 8px; z-index: 20; max-width: 360px; }
 .toast { padding: 9px 12px; background: #2b1424; border: 2px solid var(--red); border-radius: 3px; box-shadow: 0 3px 0 #0c0914; animation: slidein .3s ease-out; }
 .toast.warn { border-color: #a07a1f; background: #2b2410; }
+.toast.info { border-color: #5a46a0; background: #1f1836; }
 .toast b { font: 600 11px/1 var(--pixel); letter-spacing: .1em; display: block; margin-bottom: 3px; }
 @keyframes slidein { from { transform: translateX(30px); opacity: 0; } }
 
@@ -111,6 +112,21 @@ aside { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .xpbar > i { background: linear-gradient(90deg, #7c5cff, var(--cyan)); }
 .ctxbar.ok > i { background: var(--green); } .ctxbar.mid > i { background: var(--gold); } .ctxbar.hi > i { background: var(--red); }
 .alertdot { position: absolute; right: 10px; top: 10px; width: 8px; height: 8px; border: 1px solid #000; animation: blink 1s steps(2) infinite; }
+
+.chips { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+.chip { font: 400 10px/1 var(--pixel); padding: 3px 5px 2px; border-radius: 2px; background: #3a3346; color: var(--text); white-space: nowrap; }
+.chip.danger { background: #5a1f2c; color: #ffb3c1; animation: blink 1.2s steps(2) infinite; }
+.chip.tree { background: #1e4a35; color: #7dffb0; }
+.stagerow { cursor: pointer; background: #ffffff05; }
+.stagerow .lv { color: var(--muted); }
+.views { display: flex; gap: 4px; align-items: center; }
+.btn.sm { padding: 4px 7px 3px; font-size: 10px; }
+.btn.sm.on { color: var(--cyan); border-color: #2c6f7a; }
+#view-now { color: var(--muted); font-size: 11px; margin-left: 4px; }
+.tl-head { color: var(--muted); padding: 2px 0 8px; font-size: 12.5px; }
+.tl-head b { color: #fff; font: 600 13px/1 var(--pixel); }
+.tl-wrap { overflow-x: auto; }
+#tl { display: block; }
 
 /* detail */
 .detail { padding: 12px; display: grid; gap: 10px; border-bottom: 2px solid var(--line); background: linear-gradient(#2e2347, var(--panel)); }
@@ -175,7 +191,7 @@ aside { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 </head>
 <body>
 <header>
-  <div class="logo"><canvas id="logo" width="20" height="22"></canvas><div><h1>Agent Village</h1><small>CLAUDE CODE · CODEX</small></div></div>
+  <div class="logo"><canvas id="logo" width="20" height="22"></canvas><div><h1>Swarmstead</h1><small>CLAUDE CODE · CODEX</small></div></div>
   <span id="mode" class="badge demo">DEMO</span>
   <div class="stats">
     <div class="stat frame gold"><span class="k" data-i18n="ui.treasury">Spent today</span><span class="v" id="s-cost">$0.00</span></div>
@@ -200,6 +216,10 @@ aside { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
       <div class="empty-msg" id="empty" hidden></div>
     </div>
     <div class="stage-foot">
+      <div class="views" id="views" role="group" aria-label="View">
+        <button class="btn sm on" data-view="auto">AUTO</button><button class="btn sm" data-view="room">Room</button><button class="btn sm" data-view="arena">Arena</button>
+        <span id="view-now" class="px"></span>
+      </div>
       <div class="legend" id="legend"></div>
       <span id="clock" class="px"></span>
     </div>
@@ -217,10 +237,12 @@ aside { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
   <div class="tabs">
     <button class="tab on" data-tab="alerts"><span data-i18n="ui.alerts">Monster board</span><span class="n zero" id="alert-n">0</span></button>
     <button class="tab" data-tab="log"><span data-i18n="ui.log">Quest log</span></button>
+    <button class="tab" data-tab="timeline"><span data-i18n="ui.timeline">Timeline</span></button>
     <button class="tab" data-tab="roster"><span data-i18n="ui.roster">Bestiary</span></button>
   </div>
   <div class="pane on" id="pane-alerts"></div>
   <div class="pane log" id="pane-log"></div>
+  <div class="pane" id="pane-timeline"></div>
   <div class="pane" id="pane-roster"></div>
 </section>
 <div class="toasts" id="toasts"></div>

@@ -37,6 +37,12 @@ Adapters translate provider payloads into these events, and everything downstrea
 | `compact.start` / `compact.end` | Context compaction |
 | `usage` | Tokens for one model response |
 | `limits` | Provider quota snapshot: `{ primary: { usedPercent, windowMinutes, resetsAt } }` |
+| `model.switch` | `{ from, to }` |
+| `team` | `{ action: assign / report / task.created / task.completed, team, teammate, subject }` |
+| `agent.meta` | Late facts about an agent: `{ stage, workflow, title, parentId }` |
+| `notice` | Informational log line: `{ text, level }` |
+
+Any event may also carry `mode` (permission mode), `effort`, `stage`, `workflow`, `background` and `crons`. These are copied onto the agent. On `subagent.end`, `outcome` overrides the computed one (`clean`, `rough`, `failed`, `lost`).
 
 ## Example: a custom agent in five lines
 
@@ -60,7 +66,10 @@ curl -s localhost:4317/api/events -H 'content-type: application/json' -d '[
 | PostToolUse / PostToolUseFailure / PermissionDenied | tool.end (failure detection, interrupts are not errors) |
 | PermissionRequest, Notification `permission_prompt` | permission.request |
 | Notification `idle_prompt` / `agent_needs_input`, TeammateIdle | waiting.input |
-| Stop / StopFailure | turn.end |
+| Stop / StopFailure | turn.end (with `background`/`crons` counts, or the error as `reason`) |
+| PostModelSwitch | model.switch |
+| TaskCreated / TaskCompleted, SubagentStart/Stop of a known teammate | team |
+| CwdChanged | worktree (cwd) |
 | SubagentStart / SubagentStop | subagent.start / subagent.end |
 | PreCompact / PostCompact | compact.start / compact.end |
 

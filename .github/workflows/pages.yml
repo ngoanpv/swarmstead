@@ -10,7 +10,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - run: npm i --no-save esbuild && npm run build:demo && mkdir -p site && cp dist/agent-village-demo.html site/index.html
+      - run: npm i --no-save esbuild && npm run build:demo && mkdir -p site && cp dist/swarmstead-demo.html site/index.html
       - uses: actions/upload-pages-artifact@v3
         with: { path: site }
       - uses: actions/deploy-pages@v4

@@ -84,6 +84,7 @@ export class ClaudeTranscripts extends JsonlTailer {
     super(emit);
     this.root = root;
     this.sessions = new Map(); // sessionId -> { transcript, cwd }
+    this.runNames = new Map(); // workflow runId -> script name
   }
 
   /** Called with every hook payload: learn where the session's transcript lives. */
@@ -97,13 +98,54 @@ export class ClaudeTranscripts extends JsonlTailer {
   scanSubagents(sessionId) {
     const s = this.sessions.get(sessionId);
     if (!s) return;
-    const dir = path.join(path.dirname(s.transcript), sessionId, 'subagents');
+    const sessionDir = path.join(path.dirname(s.transcript), sessionId);
+    this.scanWorkflows(sessionId, sessionDir, s.cwd);
+    const dir = path.join(sessionDir, 'subagents');
     let names = [];
     try { names = fs.readdirSync(dir); } catch { return; }
     for (const n of names) {
       if (!n.endsWith('.jsonl')) continue;
       const id = n.replace(/^agent-/, '').replace(/\.jsonl$/, '');
-      this.track(path.join(dir, n), { sessionId, cwd: s.cwd, subagentId: id });
+      const file = path.join(dir, n);
+      if (this.files.has(file)) continue;
+      // agent-<id>.meta.json carries the subagent type (and, for workflows, more context)
+      let meta = {};
+      try { meta = JSON.parse(fs.readFileSync(path.join(dir, `agent-${id}.meta.json`), 'utf8')); } catch {}
+      this.track(file, {
+        sessionId, cwd: s.cwd, subagentId: id,
+        agentType: meta.agentType || meta.agent_type || '',
+        stage: meta.stage || meta.workflowStage || meta.phase || '',
+        workflow: meta.workflowId || meta.workflow_id || meta.workflowName || '',
+      });
+    }
+  }
+
+  /**
+   * Claude Code workflows keep, per run:
+   *   <session>/workflows/scripts/<name>-<runId>.js          (gives us the run's name)
+   *   <session>/subagents/workflows/<runId>/journal.jsonl    ({type:"started", agentId, label, phase})
+   *   <session>/subagents/workflows/<runId>/agent-<id>.jsonl (each agent's transcript: tokens)
+   */
+  scanWorkflows(sessionId, sessionDir, cwd) {
+    let scripts = [];
+    try { scripts = fs.readdirSync(path.join(sessionDir, 'workflows', 'scripts')); } catch {}
+    for (const f of scripts) {
+      const m = f.match(/^(.*)-(wf_[A-Za-z0-9-]+)\.js$/);
+      if (m) this.runNames.set(m[2], m[1]);
+    }
+    const root = path.join(sessionDir, 'subagents', 'workflows');
+    let runs = [];
+    try { runs = fs.readdirSync(root); } catch { return; }
+    for (const runId of runs) {
+      const rdir = path.join(root, runId);
+      this.track(path.join(rdir, 'journal.jsonl'), { sessionId, cwd, journal: true, runId });
+      let names = [];
+      try { names = fs.readdirSync(rdir); } catch { continue; }
+      for (const n of names) {
+        if (!/^agent-.*\.jsonl$/.test(n)) continue;
+        const id = n.replace(/^agent-/, '').replace(/\.jsonl$/, '');
+        this.track(path.join(rdir, n), { sessionId, cwd, subagentId: id, workflow: this.runNames.get(runId) || runId, agentType: 'workflow-subagent' });
+      }
     }
   }
 
@@ -137,6 +179,18 @@ export class ClaudeTranscripts extends JsonlTailer {
   }
 
   onLine(o, st, file, out) {
+    if (st.meta.journal) {
+      if (o.type !== 'started' || !o.agentId) return;
+      const ts = Date.parse(o.timestamp || o.ts) || Date.now();
+      if (this.isBackfill(st, ts) && ts < st.trackedAt - 60_000) return; // don't resurrect old runs
+      out.push({
+        v: 1, ts, provider: 'claude', kind: EV.AGENT_META, sessionId: st.meta.sessionId,
+        agentId: `${st.meta.sessionId}:${o.agentId}`, parentId: st.meta.sessionId, cwd: st.meta.cwd || '',
+        stage: o.phase ? String(o.phase) : undefined, title: o.label ? String(o.label).slice(0, 60) : undefined,
+        workflow: this.runNames.get(st.meta.runId) || st.meta.runId,
+      });
+      return;
+    }
     const m = o.message;
     if (o.type !== 'assistant' || !m || !m.usage) return;
     const key = `${m.id || ''}:${o.requestId || ''}`;
@@ -154,6 +208,9 @@ export class ClaudeTranscripts extends JsonlTailer {
       v: 1, ts, provider: 'claude', kind: EV.USAGE,
       sessionId, agentId: sub ? `${sessionId}:${sub}` : sessionId,
       parentId: sub ? sessionId : undefined,
+      agentType: sub && st.meta.agentType ? st.meta.agentType : undefined,
+      stage: st.meta.stage || undefined,
+      workflow: st.meta.workflow || undefined,
       cwd: o.cwd || st.meta.cwd || '',
       backfill: this.isBackfill(st, ts) || undefined,
       usage: {
@@ -163,6 +220,7 @@ export class ClaudeTranscripts extends JsonlTailer {
         cacheRead: u.cache_read_input_tokens || 0,
         cacheWrite: cw,
         cacheWrite1h: cw1h,
+        thinking: u.output_tokens_details?.thinking_tokens || 0,
         multiplier,
       },
     });

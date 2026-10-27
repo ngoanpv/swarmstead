@@ -1,9 +1,9 @@
 {
-  "name": "agent-village",
+  "name": "swarmstead",
   "version": "0.1.0",
   "description": "Watch your coding agents live as pixel characters that work, hand off, evolve, and warn you about loops, stuck permissions, context pressure and cost.",
   "author": {
-    "name": "Agent Village contributors"
+    "name": "Swarmstead contributors"
   },
   "license": "MIT",
   "keywords": [

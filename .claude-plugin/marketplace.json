@@ -1,11 +1,11 @@
 {
-  "name": "agent-village",
+  "name": "swarmstead",
   "owner": {
-    "name": "Agent Village contributors"
+    "name": "Swarmstead contributors"
   },
   "plugins": [
     {
-      "name": "agent-village",
+      "name": "swarmstead",
       "source": "./plugin",
       "description": "Pixel-art observability for Claude Code: live characters, handoffs, cost, issue detection and evolving familiars."
     }

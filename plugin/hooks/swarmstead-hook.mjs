@@ -1,21 +1,21 @@
 #!/usr/bin/env node
-// Agent Village hook forwarder.
+// Swarmstead hook forwarder.
 //
 // Claude Code / Codex run this for each hook event with the event JSON on
-// stdin. We stamp the time, POST it to the local Agent Village daemon and exit.
+// stdin. We stamp the time, POST it to the local Swarmstead daemon and exit.
 //
 // Contract with the coding agent — this script must NEVER get in the way:
 //   - always exit 0
 //   - never print to stdout/stderr (stdout can be interpreted as a hook decision)
 //   - give up quickly if the daemon is not running
 //
-// Usage: node agent-village-hook.mjs <claude|codex>
-// Env:   AGENT_VILLAGE_URL (default http://127.0.0.1:4317)
+// Usage: node swarmstead-hook.mjs <claude|codex>
+// Env:   SWARMSTEAD_URL (default http://127.0.0.1:4317)
 
 import http from 'node:http';
 
 const provider = (process.argv[2] || 'claude').replace(/[^a-z]/g, '') || 'claude';
-const base = process.env.AGENT_VILLAGE_URL || 'http://127.0.0.1:4317';
+const base = process.env.SWARMSTEAD_URL || 'http://127.0.0.1:4317';
 const stampedAt = Date.now();
 const MAX = 2 * 1024 * 1024;
 
@@ -32,7 +32,7 @@ process.stdin.on('end', () => {
   let body;
   try {
     const payload = JSON.parse(raw);
-    payload._av_ts = stampedAt;
+    payload._ss_ts = stampedAt;
     body = JSON.stringify(payload);
   } catch { return done(); }
   let url;

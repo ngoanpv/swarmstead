@@ -1,4 +1,4 @@
-// The Agent Village daemon: a zero-dependency local server.
+// The Swarmstead daemon: a zero-dependency local server.
 //
 //   hooks ──POST /api/hook/:provider──┐
 //   transcripts (polled) ─────────────┼─► reorder buffer ─► Village engine ─► SSE /api/stream ─► browser
@@ -113,6 +113,19 @@ export function startDaemon(overrides = {}) {
 
   const booted = { claude: claudeTx?.bootstrap() || 0, codex: codexTx?.bootstrap() || 0 };
 
+  // Agent teams: ~/.claude/teams/<team>/config.json tells us who is a teammate (and whose).
+  const teamsDir = cfg.claude.teams || path.join(path.dirname(cfg.claude.transcripts), 'teams');
+  const scanTeams = () => {
+    let names = [];
+    try { names = fs.readdirSync(teamsDir); } catch { return; }
+    for (const t of names) {
+      const conf = readJson(path.join(teamsDir, t, 'config.json'));
+      if (conf) claudeHooks.registerTeam(conf, t);
+    }
+  };
+  scanTeams();
+  timers.push(setInterval(scanTeams, 5000));
+
   // ---- http
   const server = http.createServer(async (req, res) => {
     try {
@@ -126,7 +139,7 @@ export function startDaemon(overrides = {}) {
           const provider = url.pathname.split('/')[3];
           const adapter = provider === 'codex' ? codexHooks : provider === 'claude' ? claudeHooks : null;
           if (!adapter) return reply(res, 404, { error: 'unknown provider' });
-          const ts = Number.isFinite(body._av_ts) ? body._av_ts : Date.now();
+          const ts = Number.isFinite(body._ss_ts) ? body._ss_ts : Date.now();
           enqueue(adapter.translate(body, ts));
           const tx = provider === 'codex' ? codexTx : claudeTx;
           if (body.transcript_path) tx?.noteSession(body.session_id, body.transcript_path, body.cwd);
@@ -233,7 +246,7 @@ function notify(text) {
   const now = Date.now();
   if (now - lastNotify < 15_000) return; // never spam
   lastNotify = now;
-  const title = 'Agent Village';
+  const title = 'Swarmstead';
   if (process.platform === 'darwin') {
     execFile('osascript', ['-e', `display notification ${JSON.stringify(text)} with title ${JSON.stringify(title)}`], () => {});
   } else if (process.platform === 'linux') {

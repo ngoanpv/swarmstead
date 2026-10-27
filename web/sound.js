@@ -8,19 +8,21 @@ const SFX = {
   alert: [[220, 0.08], [0, 0.04], [220, 0.12]],
   monster: [[180, 0.06], [140, 0.1]],
   defeat: [[880, 0.05], [660, 0.05], [1175, 0.12]],
+  deliver: [[784, 0.04], [1047, 0.07]],
+  fanin: [[523, 0.08], [659, 0.08], [784, 0.08], [1047, 0.08], [784, 0.06], [1319, 0.3]],
 };
 
 export class Sound {
   constructor() {
     this.enabled = false;
-    try { this.enabled = localStorage.getItem('av.sound') === '1'; } catch {}
+    try { this.enabled = localStorage.getItem('swarmstead.sound') === '1'; } catch {}
     this.ctx = null;
     this.lastAt = {};
   }
 
   toggle() {
     this.enabled = !this.enabled;
-    try { localStorage.setItem('av.sound', this.enabled ? '1' : '0'); } catch {}
+    try { localStorage.setItem('swarmstead.sound', this.enabled ? '1' : '0'); } catch {}
     if (this.enabled) this.play('coin');
     return this.enabled;
   }

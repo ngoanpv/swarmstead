@@ -3,15 +3,18 @@
 // renderer should animate (coins flying, a scroll being handed off, a monster
 // appearing). snapshot() returns plain JSON for the renderer / the wire.
 
-import { EV, CATEGORY, categorize, isTestCommand } from './schema.js';
+import { EV, CATEGORY, categorize, isTestCommand, EXHAUSTION, AGENT_FIELDS } from './schema.js';
 import { priceUsage } from './pricing.js';
-import { projectName, errorSignature } from './util.js';
+import { projectName, errorSignature, worktreeOf, median } from './util.js';
 
 const RING = 12;
 const BURN_BUCKET_MS = 10_000;
 const BURN_BUCKETS = 60; // 10 minutes of history
 const BLOCK_MS = 5 * 3600_000;
 const DEFAULT_WINDOW = 200_000;
+const RUN_IDLE_MS = 15_000;     // a fan-out run ends after this long with nothing running
+const RUN_TIMELINE_CAP = 1000;  // workflows can spawn up to ~1000 agents
+const FANIN_QUIET_MS = 2500;    // nothing running for this long = everyone has reported back
 
 export const STATUS = Object.freeze({
   IDLE: 'idle',
@@ -26,6 +29,7 @@ export const STATUS = Object.freeze({
   PERMISSION: 'permission',
   WAITING: 'waiting',
   COMPACTING: 'compacting',
+  EXHAUSTED: 'exhausted',   // rate limit / overloaded / billing — can't continue
   DONE: 'done',
 });
 
@@ -44,11 +48,14 @@ export const BUSY = new Set([
   STATUS.DELEGATING, STATUS.PLANNING, STATUS.TOOL, STATUS.COMPACTING,
 ]);
 
+/** How a subagent's work came back to its orchestrator. */
+export const OUTCOME = Object.freeze({ CLEAN: 'clean', ROUGH: 'rough', FAILED: 'failed', LOST: 'lost' });
+
 function newTurn(ts) {
   return {
     startedAt: ts, cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
     tools: 0, edits: 0, runs: 0, failedRuns: 0, testFails: 0, testFixes: 0,
-    loops: 0, errorEchoes: 0, returns: 0, permissions: 0, compactions: 0,
+    loops: 0, errorEchoes: 0, returns: 0, permissions: 0, compactions: 0, denied: 0,
     cat: { read: 0, write: 0, run: 0, web: 0, delegate: 0, plan: 0, tool: 0 },
   };
 }
@@ -61,7 +68,7 @@ export class World {
   constructor({ now = Date.now() } = {}) {
     this.agents = new Map();
     this.order = [];           // stable seat order
-    this.handoffs = [];        // last N handoffs, for the timeline
+    this.handoffs = [];        // last N handoffs
     this.feed = [];            // last N human-readable log lines
     this.totals = { cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, byModel: {} };
     this.burn = new Array(BURN_BUCKETS).fill(0);
@@ -71,7 +78,10 @@ export class World {
     this.lastTs = now;
     this.fileTouches = new Map(); // abs path -> [{agentId, sessionId, ts}]
     this.limits = {};             // provider -> latest rate-limit snapshot
+    this.runs = new Map();        // runId -> fan-out run (subagent swarm / workflow)
+    this.teams = new Map();       // team name -> { lead, members:Set, open, done }
     this.dayStart = 0;
+    this.runSeq = 0;
     this.rollDay(now);
   }
 
@@ -91,10 +101,11 @@ export class World {
       label: ev.label || '',
       cwd,
       project: projectName(cwd),
+      worktree: worktreeOf(cwd)?.name || '',
       status: STATUS.IDLE,
       tool: '', detail: '', statusSince: ev.ts,
       startedAt: ev.ts, lastTs: ev.ts, endedAt: 0, alive: true,
-      model: '', cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
+      model: '', cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, thinking: 0,
       context: { used: 0, window: DEFAULT_WINDOW },
       turn: newTurn(ev.ts), turns: 0,
       recentTools: [], recentErrors: [],
@@ -102,8 +113,10 @@ export class World {
       monsters: [],            // open failures (ids)
       openTools: {},           // toolUseId -> {tool, category, detail, ts, cmd}
       children: [],
-      waitingSince: 0, permissionSince: 0,
+      waitingSince: 0, permissionSince: 0, lastCompactTs: 0,
       mood: 'ok',
+      mode: '', effort: '', background: 0, crons: 0, team: '', teammate: '', stage: '', workflow: '',
+      exhausted: null, source: '', runId: null, outcome: null,
     };
     a.familiar = familiarKey(a);
     this.agents.set(a.id, a);
@@ -113,6 +126,15 @@ export class World {
       if (p && !p.children.includes(a.id)) p.children.push(a.id);
     }
     return { agent: a, created: true };
+  }
+
+  reparent(a, parentId) {
+    if (!parentId || a.parentId === parentId || parentId === a.id) return;
+    const old = this.agents.get(a.parentId);
+    if (old) old.children = old.children.filter((c) => c !== a.id);
+    a.parentId = parentId;
+    const p = this.agents.get(parentId);
+    if (p && !p.children.includes(a.id)) p.children.push(a.id);
   }
 
   setStatus(a, status, ts, tool = '', detail = '') {
@@ -144,8 +166,11 @@ export class World {
     }
     this.lastTs = Math.max(this.lastTs, ts);
     const { agent: a, created } = this.ensureAgent(ev);
-    if (ev.cwd && !a.cwd) { a.cwd = ev.cwd; a.project = projectName(ev.cwd); a.familiar = familiarKey(a); }
+    if (ev.cwd && !a.cwd) { a.cwd = ev.cwd; a.project = projectName(ev.cwd); a.worktree = worktreeOf(ev.cwd)?.name || ''; a.familiar = familiarKey(a); }
     if (ev.label) a.label = ev.label;
+    for (const k of AGENT_FIELDS) if (ev[k] != null && ev[k] !== '') a[k] = ev[k];
+    // an agent first seen through a transcript/journal line learns its real type later
+    if (ev.agentType && a.parentId && a.type === 'subagent' && ev.agentType !== 'subagent') { a.type = ev.agentType; a.familiar = familiarKey(a); }
     a.lastTs = ts;
     // Late transcript lines must not resurrect an agent that already finished.
     if (!a.alive && ev.kind !== EV.SESSION_END && ev.kind !== EV.SUBAGENT_END && ev.kind !== EV.USAGE) {
@@ -156,7 +181,9 @@ export class World {
     switch (ev.kind) {
       case EV.SESSION_START:
         this.setStatus(a, STATUS.IDLE, ts);
-        this.log(ts, a.id, `${a.project}: session started`);
+        a.source = ev.reason || '';
+        if (ev.reason === 'resume' || ev.reason === 'fork') fx.push({ fx: 'note', agentId: a.id, text: ev.reason === 'fork' ? 'FORKED' : 'RESUMED' });
+        this.log(ts, a.id, `${a.project}: session ${ev.reason && ev.reason !== 'startup' ? ev.reason : 'started'}`);
         break;
 
       case EV.SESSION_END:
@@ -166,7 +193,7 @@ export class World {
 
       case EV.PROMPT:
         a.turn = newTurn(ts);
-        a.waitingSince = 0; a.permissionSince = 0;
+        a.waitingSince = 0; a.permissionSince = 0; a.exhausted = null;
         this.setStatus(a, STATUS.THINKING, ts);
         fx.push({ fx: 'bubble', agentId: a.id, icon: 'spark' });
         break;
@@ -183,6 +210,8 @@ export class World {
         this.setStatus(a, CATEGORY_STATUS[category] || STATUS.TOOL, ts, ev.tool, ev.detail || '');
         if (category === CATEGORY.WRITE && ev.file) this.touchFile(a, ev.file, ts, fx);
         if (category === CATEGORY.RUN) a.turn.runs++;
+        const parallel = Object.keys(a.openTools).length;
+        if (parallel >= 2) fx.push({ fx: 'parallel', agentId: a.id, count: parallel });
         break;
       }
 
@@ -191,6 +220,11 @@ export class World {
         delete a.openTools[ev.toolUseId || ev.tool];
         const category = ev.category || open?.category || categorize(ev.tool);
         const cmd = ev.command || open?.cmd || '';
+        if (ev.denied) {
+          a.turn.denied++;
+          fx.push({ fx: 'bubble', agentId: a.id, icon: 'deny' });
+          this.log(ts, a.id, `${ev.tool || 'tool'} was denied`, 'warn');
+        }
         if (ev.ok === false) {
           const sig = errorSignature(ev.error || `${ev.tool} failed`);
           a.recentErrors.push({ sig, ts, text: ev.error || '' });
@@ -231,26 +265,37 @@ export class World {
 
       case EV.WAITING:
         a.waitingSince = a.waitingSince || ts;
-        this.setStatus(a, STATUS.WAITING, ts);
+        this.setStatus(a, STATUS.WAITING, ts, '', ev.detail || '');
         fx.push({ fx: 'bubble', agentId: a.id, icon: 'question' });
         break;
 
       case EV.TURN_END: {
         a.turns++;
         a.permissionSince = 0;
-        const summary = this.closeTurn(a, ts);
-        this.setStatus(a, a.parentId ? STATUS.DONE : STATUS.WAITING, ts);
-        a.waitingSince = a.parentId ? 0 : ts;
+        const reason = ev.reason || '';
+        const summary = this.closeTurn(a, ts, { failure: reason || null });
+        if (EXHAUSTION.has(reason)) {
+          a.exhausted = { reason, since: ts };
+          this.setStatus(a, STATUS.EXHAUSTED, ts, '', reason);
+          fx.push({ fx: 'bubble', agentId: a.id, icon: 'exhausted' });
+          this.log(ts, a.id, `${a.project}: stopped — ${reason.replace(/_/g, ' ')}`, 'warn');
+        } else {
+          this.setStatus(a, a.parentId ? STATUS.DONE : STATUS.WAITING, ts);
+          a.waitingSince = a.parentId ? 0 : ts;
+          fx.push({ fx: 'bubble', agentId: a.id, icon: reason ? 'alert' : 'check' });
+          if (reason) this.log(ts, a.id, `${a.project}: turn failed — ${reason}`, 'warn');
+        }
         fx.push({ fx: 'turn', agentId: a.id, summary });
-        fx.push({ fx: 'bubble', agentId: a.id, icon: 'check' });
         break;
       }
 
       case EV.SUBAGENT_START: {
+        if (ev.parentId) this.reparent(a, ev.parentId);
         const parent = this.agents.get(a.parentId);
         if (parent) {
           this.handoff(parent.id, a.id, 'delegate', ts, ev.detail || a.type, fx);
           this.log(ts, parent.id, `delegated to ${a.type}${ev.detail ? ': ' + ev.detail : ''}`);
+          this.joinRun(parent, a, ev, ts, fx);
         }
         a.turn = newTurn(ts);
         this.setStatus(a, STATUS.THINKING, ts);
@@ -261,13 +306,17 @@ export class World {
         const parent = this.agents.get(a.parentId);
         if (a.alive) {
           a.turns++;
-          const summary = this.closeTurn(a, ts);
+          const outcome = ev.outcome || this.outcomeOf(a, parent, ts, ev.reason);
+          a.outcome = outcome;
+          const run = a.runId ? this.runs.get(a.runId) : null;
+          const summary = this.closeTurn(a, ts, { outcome, swarm: run ? run.total : 1 });
           fx.push({ fx: 'turn', agentId: a.id, summary });
           if (parent) {
             parent.turn.returns++;
-            this.handoff(a.id, parent.id, 'return', ts, ev.detail || 'report', fx);
-            this.log(ts, a.id, `${a.type} reported back to ${parent.type === 'main' ? parent.project : parent.type}`, 'good');
+            this.handoff(a.id, parent.id, 'return', ts, ev.detail || 'report', fx, { outcome });
+            this.log(ts, a.id, `${a.type} reported back to ${parent.type === 'main' ? parent.project : parent.type} (${outcome})`, outcome === OUTCOME.CLEAN ? 'good' : 'warn');
           }
+          if (run) this.leaveRun(run, a, outcome, ts, fx);
         }
         this.endAgent(a, ts, fx);
         break;
@@ -275,6 +324,7 @@ export class World {
 
       case EV.COMPACT:
         a.turn.compactions++;
+        a.lastCompactTs = ts;
         this.setStatus(a, STATUS.COMPACTING, ts);
         fx.push({ fx: 'compact', agentId: a.id, auto: ev.reason !== 'manual' });
         this.log(ts, a.id, `${ev.reason === 'manual' ? 'manual' : 'auto'} compaction — memory is getting squeezed`, ev.reason === 'manual' ? 'info' : 'warn');
@@ -283,6 +333,63 @@ export class World {
       case EV.COMPACT_END:
         a.context.used = Math.min(a.context.used, Math.round(a.context.window * 0.15));
         this.setStatus(a, STATUS.THINKING, ts);
+        break;
+
+      case EV.MODEL_SWITCH:
+        if (ev.to) a.model = ev.to;
+        fx.push({ fx: 'model', agentId: a.id, from: ev.from || '', to: ev.to || '' });
+        this.log(ts, a.id, `model switched ${ev.from || '?'} → ${ev.to || '?'}`);
+        break;
+
+      case EV.WORKTREE:
+        if (ev.action === 'create' || ev.action === 'cwd') {
+          const wt = worktreeOf(ev.path || '');
+          a.worktree = ev.name || wt?.name || a.worktree;
+          if (ev.action === 'cwd' && ev.path) a.cwd = ev.path;
+        }
+        if (ev.action === 'remove') a.worktree = '';
+        fx.push({ fx: 'note', agentId: a.id, text: ev.action === 'remove' ? 'WORKTREE -' : `WORKTREE ${a.worktree || ''}`.trim() });
+        this.log(ts, a.id, `worktree ${ev.action}${a.worktree ? ': ' + a.worktree : ''}`);
+        break;
+
+      case EV.AGENT_META: {
+        if (ev.title) a.title = ev.title;
+        if (ev.parentId) this.reparent(a, ev.parentId);
+        if (ev.stage && a.runId) this.moveStage(a, ev.stage);
+        if (ev.workflow && a.runId) { const run = this.runs.get(a.runId); if (run && (!run.workflow || run.workflow.startsWith('wf_'))) run.workflow = ev.workflow; }
+        break;
+      }
+
+      case EV.TEAM: {
+        const name = ev.team || a.team || 'team';
+        let t = this.teams.get(name);
+        if (!t) { t = { name, lead: null, members: new Set(), open: 0, done: 0 }; this.teams.set(name, t); }
+        a.team = name;
+        if (ev.lead) t.lead = a.id; else t.members.add(a.id);
+        if (ev.action === 'task.created') { t.open++; this.log(ts, a.id, `team task: ${ev.subject || 'new task'}`); }
+        if (ev.action === 'task.completed') { t.open = Math.max(0, t.open - 1); t.done++; fx.push({ fx: 'note', agentId: a.id, text: 'TASK DONE' }); }
+        // In-process teammates handle one message at a time: the lead hands a message
+        // over (assign) and gets an answer back (report); the teammate stays in the room.
+        if (ev.action === 'assign') {
+          const lead = this.agents.get(a.parentId);
+          if (lead) { t.lead = lead.id; this.handoff(lead.id, a.id, 'delegate', ts, ev.subject || 'message', fx); }
+          a.turn = newTurn(ts);
+          this.setStatus(a, STATUS.THINKING, ts);
+        }
+        if (ev.action === 'report') {
+          const lead = this.agents.get(a.parentId);
+          const outcome = this.outcomeOf(a, lead, ts, ev.reason);
+          const summary = this.closeTurn(a, ts, { outcome });
+          a.turns++;
+          fx.push({ fx: 'turn', agentId: a.id, summary });
+          if (lead) { lead.turn.returns++; this.handoff(a.id, lead.id, 'return', ts, 'reply', fx, { outcome, stay: true }); }
+          this.setStatus(a, STATUS.IDLE, ts, '', 'teammate idle');
+        }
+        break;
+      }
+
+      case EV.NOTICE:
+        this.log(ts, a.id, ev.text || 'notice', ev.level || 'info');
         break;
 
       case EV.USAGE:
@@ -297,6 +404,97 @@ export class World {
     return fx;
   }
 
+  /** Decide how a subagent's report came back. */
+  outcomeOf(a, parent, ts, reason) {
+    if (reason || a.monsters.length || a.exhausted) return OUTCOME.FAILED;
+    if (parent && (parent.status === STATUS.COMPACTING || ts - parent.lastCompactTs < 60_000)) return OUTCOME.LOST;
+    const t = a.turn;
+    if (t.loops || t.errorEchoes || t.failedRuns > t.testFixes || t.denied) return OUTCOME.ROUGH;
+    return OUTCOME.CLEAN;
+  }
+
+  // ---------------------------------------------------------------- runs (fan-out / workflows)
+  joinRun(parent, a, ev, ts, fx) {
+    let run = parent.runId ? this.runs.get(parent.runId) : null;
+    const wf = ev.workflow || a.workflow || '';
+    if (!run || run.endedAt || (wf && run.workflow && wf !== run.workflow)) {
+      run = {
+        id: `run${++this.runSeq}`, parentId: parent.id, project: parent.project, workflow: wf,
+        startedAt: ts, endedAt: 0, lastActivity: ts, total: 0, running: 0, done: 0, failed: 0, cost: 0,
+        outcomes: { clean: 0, rough: 0, failed: 0, lost: 0 }, stages: [], timeline: [],
+      };
+      this.runs.set(run.id, run);
+      parent.runId = run.id;
+      fx.push({ fx: 'run.start', runId: run.id, agentId: parent.id, workflow: wf });
+      if (this.runs.size > 20) this.runs.delete(this.runs.keys().next().value);
+    }
+    if (wf && !run.workflow) run.workflow = wf;
+    a.runId = run.id;
+    const stageName = ev.stage || a.stage || a.type;
+    a.stage = stageName;
+    let st = run.stages.find((s) => s.name === stageName);
+    if (!st) { st = { name: stageName, total: 0, running: 0, done: 0, failed: 0, cost: 0, durations: [], first: ts, last: ts, type: a.type }; run.stages.push(st); }
+    st.total++; st.running++; st.last = ts;
+    run.total++; run.running++; run.lastActivity = ts; run.fannedIn = false; run.quietSince = 0;
+    run.timeline.push({ id: a.id, stage: stageName, start: ts, end: 0, outcome: '' });
+    if (run.timeline.length > RUN_TIMELINE_CAP) run.timeline.shift();
+  }
+
+  leaveRun(run, a, outcome, ts, fx) {
+    const st = run.stages.find((s) => s.name === a.stage);
+    run.running = Math.max(0, run.running - 1);
+    run.lastActivity = ts;
+    if (outcome === OUTCOME.FAILED) run.failed++; else run.done++;
+    run.outcomes[outcome] = (run.outcomes[outcome] || 0) + 1;
+    run.cost += a.cost;
+    if (st) {
+      st.running = Math.max(0, st.running - 1);
+      if (outcome === OUTCOME.FAILED) st.failed++; else st.done++;
+      st.cost += a.cost; st.last = ts;
+      st.durations.push(ts - a.startedAt);
+      if (st.durations.length > 200) st.durations.shift();
+      if (st.running === 0 && st.done + st.failed === st.total) fx.push({ fx: 'stage.done', runId: run.id, stage: st.name, agentId: run.parentId });
+    }
+    const item = [...run.timeline].reverse().find((x) => x.id === a.id);
+    if (item) { item.end = ts; item.outcome = outcome; }
+    // Fan-in is decided in tickRuns after a short quiet period: workflow pipelines
+    // hit running === 0 for a moment between stages, and that is not the end.
+    if (run.running === 0) run.quietSince = ts;
+  }
+
+  /** A late fact (workflow journal) says this agent belongs to another stage. */
+  moveStage(a, stageName) {
+    const run = this.runs.get(a.runId);
+    if (!run) { a.stage = stageName; return; }
+    // a.stage may already be overwritten by the event's fields; the run timeline remembers where it was counted
+    const item = [...run.timeline].reverse().find((x) => x.id === a.id);
+    const fromName = item ? item.stage : a.stage;
+    if (fromName === stageName) { a.stage = stageName; return; }
+    const from = run.stages.find((s) => s.name === fromName);
+    if (from) { from.total--; if (a.alive) from.running--; else if (a.outcome === OUTCOME.FAILED) from.failed--; else from.done--; }
+    let st = run.stages.find((s) => s.name === stageName);
+    if (!st) { st = { name: stageName, total: 0, running: 0, done: 0, failed: 0, cost: 0, durations: [], first: a.startedAt, last: a.lastTs, type: a.type }; run.stages.push(st); }
+    st.total++; if (a.alive) st.running++; else if (a.outcome === OUTCOME.FAILED) st.failed++; else st.done++;
+    if (from && from.total <= 0) run.stages = run.stages.filter((s) => s !== from);
+    if (item) item.stage = stageName;
+    a.stage = stageName;
+  }
+
+  /** Close runs that have been quiet for a while (called from tick). */
+  tickRuns(now, fx) {
+    for (const run of this.runs.values()) {
+      if (!run.endedAt && run.running === 0 && run.quietSince && !run.fannedIn && now - run.quietSince >= FANIN_QUIET_MS) {
+        run.fannedIn = true;
+        // Everyone who went out has reported back: the fan-in moment.
+        fx.push({ fx: 'fanin', runId: run.id, agentId: run.parentId, done: run.done, failed: run.failed, total: run.total, outcomes: { ...run.outcomes } });
+      }
+      if (!run.endedAt && run.running === 0 && now - run.lastActivity > RUN_IDLE_MS) {
+        run.endedAt = run.lastActivity;
+        fx.push({ fx: 'run.end', runId: run.id, agentId: run.parentId });
+      }
+    }
+  }
+
   applyUsage(a, ev, ts, fx) {
     const u = ev.usage || {};
     const cost = this.addTotals(ev, ts);
@@ -305,6 +503,7 @@ export class World {
     for (const t of [a, a.turn]) {
       t.cost += cost; t.input += input; t.output += output; t.cacheRead += cr; t.cacheWrite += cw;
     }
+    a.thinking += u.thinking || 0;
     a.costSinceWrite += cost;
     // Context size = everything the model had to read for this response.
     if (!ev.context && (input + cr + cw) > 0 && !u.noContext) {
@@ -340,11 +539,11 @@ export class World {
     }
   }
 
-  closeTurn(a, ts) {
+  closeTurn(a, ts, extra = {}) {
     const t = a.turn;
     const summary = {
       agentId: a.id, familiar: a.familiar, type: a.type, project: a.project, provider: a.provider,
-      durationMs: ts - t.startedAt, ...t, cat: { ...t.cat },
+      durationMs: ts - t.startedAt, ...t, cat: { ...t.cat }, ...extra,
     };
     delete summary.startedAt;
     a.turn = newTurn(ts);
@@ -360,8 +559,8 @@ export class World {
     fx.push({ fx: 'despawn', agentId: a.id });
   }
 
-  handoff(from, to, kind, ts, text, fx) {
-    const h = { from, to, kind, ts, text: text || '' };
+  handoff(from, to, kind, ts, text, fx, extra = {}) {
+    const h = { from, to, kind, ts, text: text || '', ...extra };
     this.handoffs.push(h);
     if (this.handoffs.length > 100) this.handoffs.shift();
     fx.push({ fx: 'handoff', ...h });
@@ -374,7 +573,7 @@ export class World {
     list.push({ agentId: a.id, sessionId: a.sessionId, ts });
     if (list.length > 8) list.shift();
     for (const p of prev) {
-      // Parent/child editing the same file in sequence is coordinated work, not a collision.
+      // Parent/child (or siblings under one orchestrator) editing in sequence is coordinated work.
       const other = this.agents.get(p.agentId);
       if (!other || !other.alive) continue;
       const related = other.id === a.parentId || a.id === other.parentId;
@@ -421,34 +620,65 @@ export class World {
     this.block.tokens += tokens;
   }
 
-  /** Remove long-finished agents so the village does not fill up forever. */
+  /**
+   * Remove long-finished agents so the village does not fill up forever.
+   * Subagents of a big swarm go quickly; their story lives on in the run timeline.
+   */
   gc(now, keepMs = 3 * 60_000) {
-    for (const id of [...this.order]) {
+    let removed = false;
+    for (const id of this.order) {
       const a = this.agents.get(id);
-      if (a && !a.alive && now - a.endedAt > keepMs) {
+      if (!a || a.alive) continue;
+      const run = a.runId && this.runs.get(a.runId);
+      const keep = a.parentId ? (run && run.total > 12 ? 20_000 : 60_000) : keepMs;
+      if (now - a.endedAt > keep) {
         this.agents.delete(id);
-        this.order = this.order.filter((x) => x !== id);
+        removed = true;
         const p = a.parentId && this.agents.get(a.parentId);
         if (p) p.children = p.children.filter((c) => c !== id);
       }
     }
+    if (removed) this.order = this.order.filter((id) => this.agents.has(id));
+  }
+
+  runView(run, now) {
+    return {
+      id: run.id, parentId: run.parentId, project: run.project, workflow: run.workflow,
+      startedAt: run.startedAt, endedAt: run.endedAt, total: run.total, running: run.running,
+      done: run.done, failed: run.failed, cost: run.cost, outcomes: { ...run.outcomes },
+      stages: run.stages.map((s) => ({
+        name: s.name, type: s.type, total: s.total, running: s.running, done: s.done, failed: s.failed,
+        cost: s.cost, median: median(s.durations), first: s.first, last: s.last,
+      })),
+      // compact timeline: [agentId, stageIndex, start, end, outcome]
+      timeline: run.timeline.map((x) => [x.id, run.stages.findIndex((s) => s.name === x.stage), x.start, x.end, x.outcome]),
+    };
   }
 
   snapshot(now = this.lastTs) {
-    const agents = this.order.map((id) => {
+    const agents = this.order.filter((id) => this.agents.has(id)).map((id) => {
       const a = this.agents.get(id);
       return {
         id: a.id, sessionId: a.sessionId, parentId: a.parentId, provider: a.provider, type: a.type,
-        label: a.label, project: a.project, cwd: a.cwd, status: a.status, tool: a.tool, detail: a.detail,
+        label: a.label, project: a.project, cwd: a.cwd, worktree: a.worktree, status: a.status, tool: a.tool, detail: a.detail,
         statusSince: a.statusSince, startedAt: a.startedAt, lastTs: a.lastTs, endedAt: a.endedAt, alive: a.alive,
         model: a.model, cost: a.cost, input: a.input, output: a.output, cacheRead: a.cacheRead, cacheWrite: a.cacheWrite,
-        context: { ...a.context }, turns: a.turns, monsters: a.monsters.length, children: [...a.children],
+        thinking: a.thinking, context: { ...a.context }, turns: a.turns, monsters: a.monsters.length, children: [...a.children],
         familiar: a.familiar, mood: a.mood, turnCost: a.turn.cost, turnTools: a.turn.tools,
+        mode: a.mode, effort: a.effort, background: a.background, crons: a.crons, team: a.team, teammate: a.teammate,
+        stage: a.stage, workflow: a.workflow, title: a.title || '', exhausted: a.exhausted, source: a.source, runId: a.runId, outcome: a.outcome,
+        parallel: Object.keys(a.openTools).length,
       };
     });
+    const runs = [...this.runs.values()]
+      .filter((r) => !r.endedAt || now - r.endedAt < 5 * 60_000)
+      .map((r) => this.runView(r, now));
+    const teams = [...this.teams.values()].map((t) => ({ name: t.name, lead: t.lead, members: [...t.members], open: t.open, done: t.done }));
     return {
       now,
       agents,
+      runs,
+      teams,
       totals: { ...this.totals, byModel: { ...this.totals.byModel } },
       burnRate: this.burnRate(now, 5),
       burn: [...this.burn],
