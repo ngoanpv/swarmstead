@@ -268,8 +268,8 @@ async function sse(port, onMsg) {
 }
 
 test('gate: approve from the village, deny, time out, and the budget brake', async () => {
-  const port = 48000 + Math.floor(Math.random() * 1000);
-  const d = await startDaemon({ port, gate: { approvals: true, waitSubSec: 3, waitMainSec: 3, brakes: true }, thresholds: { dailyBudgetUsd: 0.5 } });
+  const d = await startDaemon({ port: 0, gate: { approvals: true, waitSubSec: 3, waitMainSec: 3, brakes: true }, thresholds: { dailyBudgetUsd: 0.5 } });
+  const port = d.cfg.port;
   let stop = () => {};
   try {
     const base = `http://127.0.0.1:${port}`;
@@ -338,8 +338,8 @@ test('gate: approve from the village, deny, time out, and the budget brake', asy
 });
 
 test('git endpoint books commits; replay endpoints serve the day log', async () => {
-  const port = 49000 + Math.floor(Math.random() * 900);
-  const d = await startDaemon({ port });
+  const d = await startDaemon({ port: 0 });
+  const port = d.cfg.port;
   try {
     const base = `http://127.0.0.1:${port}`;
     await fetch(`${base}/api/events`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'usage', agentId: 'H', cwd: '/w/shop', costUsd: 0.3 }) });

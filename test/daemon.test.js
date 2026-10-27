@@ -18,8 +18,8 @@ const { installClaude, uninstallClaude } = await import('../server/install.js');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 test('hook script -> daemon -> state, plus transcript usage', async () => {
-  const port = 47000 + Math.floor(Math.random() * 1000);
-  const d = await startDaemon({ port });
+  const d = await startDaemon({ port: 0 });
+  const port = d.cfg.port;
   try {
     const transcript = path.join(home, 'S9.jsonl');
     fs.writeFileSync(transcript, '');

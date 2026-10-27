@@ -271,8 +271,14 @@ export function startDaemon(overrides = {}) {
   });
 
   return new Promise((resolve, reject) => {
-    server.once('error', reject);
+    server.once('error', (err) => {
+      // e.g. EADDRINUSE / EACCES: stop everything we started so the process can exit
+      timers.forEach(clearInterval);
+      logStream?.end();
+      reject(err);
+    });
     server.listen(cfg.port, cfg.host, () => {
+      cfg.port = server.address().port; // port 0 = any free port (tests)
       const close = () => {
         timers.forEach(clearInterval);
         approvals.cancelAll();
