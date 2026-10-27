@@ -239,10 +239,16 @@ export class CodexRollouts extends JsonlTailer {
     if (rolloutPath) this.track(rolloutPath, { sessionId, cwd });
   }
 
-  pollAll() { this.poll(); }
+  // Without hooks (not installed, or not trusted in /hooks) nothing tells us a
+  // session started, so keep looking for new rollouts in today's folder.
+  pollAll() {
+    this.scan(new Date());
+    this.poll();
+  }
 
-  bootstrap() {
-    const d = new Date();
+  bootstrap() { return this.scan(new Date()); }
+
+  scan(d) {
     const dir = path.join(this.root, String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0'));
     let names = [];
     try { names = fs.readdirSync(dir); } catch { return 0; }

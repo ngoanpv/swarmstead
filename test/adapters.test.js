@@ -78,6 +78,28 @@ test('claude transcripts: dedupe by message id, subagents, backfill flag', () =>
   assert.equal(got.length, 4);
 });
 
+test('codex rollouts: a session started after the daemon is found without hooks', () => {
+  const root = tmpdir();
+  const d = new Date();
+  const dir = path.join(root, String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0'));
+  const got = [];
+  const tx = new CodexRollouts((evs) => got.push(...evs), { root });
+  assert.equal(tx.bootstrap(), 0, 'no folder for today yet');
+  fs.mkdirSync(dir, { recursive: true });
+  const ts = new Date().toISOString();
+  fs.writeFileSync(path.join(dir, 'rollout-late.jsonl'), [
+    JSON.stringify({ timestamp: ts, type: 'session_meta', payload: { id: 'T2', cwd: '/w/late' } }),
+    JSON.stringify({ timestamp: ts, type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: { total_tokens: 50 }, last_token_usage: { input_tokens: 40, output_tokens: 10 } } } }),
+  ].join('\n') + '\n');
+  tx.pollAll();
+  tx.pollAll();
+  const usage = got.filter((e) => e.kind === 'usage');
+  assert.equal(usage.length, 1, 'tracked once across polls');
+  assert.equal(usage[0].sessionId, 'T2');
+  assert.equal(usage[0].cwd, '/w/late');
+  assert.equal(usage[0].backfill, undefined, 'live, so the agent appears');
+});
+
 test('codex rollouts: token_count deltas, cached input split, rate limits', () => {
   const root = tmpdir();
   const file = path.join(root, 'rollout-test.jsonl');
