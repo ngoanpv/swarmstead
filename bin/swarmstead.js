@@ -111,6 +111,7 @@ async function install(what) {
   } else if (what === 'codex') {
     const r = m.installCodex();
     console.log(`${c.green('✓')} Added ${r.events} hooks to ${r.file}  ${c.yellow('(beta)')}`);
+    console.log(c.dim('  Your next Codex session starts the village on its own ("autostart": false in ~/.swarmstead/config.json turns that off).'));
     console.log(c.yellow('  Codex only runs hooks you have trusted: open Codex, run /hooks and trust the swarmstead entries.'));
   } else {
     console.error('Usage: swarmstead install <claude|codex> [--project]');

@@ -28,9 +28,9 @@ claude plugin marketplace add ngoanpv/swarmstead
 claude plugin install swarmstead@swarmstead
 ```
 
-**2. Start a new Claude Code session.** The plugin starts the village in the background (the first time takes a few seconds while npm fetches it). Later sessions reuse it.
+**2. Start a new Claude Code session.** The plugin starts the village in the background (the first time takes a few seconds while npm fetches it), and shows its address at the top of the session. Later sessions reuse it.
 
-**3. Open http://127.0.0.1:4317/web/.** Your session walks in through the door as a villager.
+**3. Type `/village` in Claude Code** (or open http://127.0.0.1:4317/web/). Your session walks in through the door as a villager.
 
 Nothing there? Run `npx swarmstead doctor` to check the setup, or `npx swarmstead ping` to send a fake session through.
 
@@ -55,11 +55,12 @@ There is more in the village itself: what every villager, scroll and monster mea
 
 | To | Do |
 |---|---|
-| Open the village | http://127.0.0.1:4317/web/ |
+| Open the village | `/village` in Claude Code, or http://127.0.0.1:4317/web/ |
 | Check the setup | `npx swarmstead doctor` |
 | Update | `claude plugin update swarmstead@swarmstead`. Third-party plugins don't update on their own; you can turn on auto-update in `/plugin` > Marketplaces. |
 | Find out why the village didn't start | Read `~/.swarmstead/daemon.log` |
 | Run the daemon yourself | Set `"autostart": false` in `~/.swarmstead/config.json`, then `npx swarmstead start` |
+| Hide the address line at session start | Set `"reminder": false` in `~/.swarmstead/config.json` |
 | Uninstall | `claude plugin uninstall swarmstead@swarmstead`. Your config and event log stay in `~/.swarmstead/`; delete it if you want them gone. |
 
 ## Other ways to install
@@ -91,7 +92,7 @@ With the plugin, set `"lan": true` in `~/.swarmstead/config.json` instead of `--
 npx swarmstead install codex     # writes ~/.codex/hooks.json
 ```
 
-Codex only runs hooks you have trusted. Open Codex, run `/hooks`, and trust the swarmstead entries. Token usage and rate limits come from `~/.codex/sessions/**/rollout-*.jsonl`.
+Codex only runs hooks you have trusted. Open Codex, run `/hooks`, and trust the swarmstead entries. After that, every Codex session starts the village if it isn't running, just like the Claude Code plugin; open http://127.0.0.1:4317/web/. Token usage and rate limits come from `~/.codex/sessions/**/rollout-*.jsonl`.
 
 ### From source
 
@@ -103,7 +104,8 @@ Codex only runs hooks you have trusted. Open Codex, run `/hooks`, and trust the 
 - The state holds **summaries only**: file paths, the first 60 characters of a command, a search query. File contents, diffs, prompts and tool output are never stored. Use `"capture": "minimal"` to keep even less.
 - **What can leave your machine**, only if you set it up: push notifications to your ntfy topic (`notify.ntfy`) and messages to a Slack or Discord webhook (`notify.webhook`). Each carries an alert's title and one line of text: the agent, the tool and a short detail. Nothing is ever sent to the Swarmstead author.
 - An event log is written to `~/.swarmstead/events/` so you can replay sessions. It stays on your machine until you delete it. Turn it off with `"logEvents": false`.
-- The plugin's autostart runs `npx -y swarmstead@<version>` with exactly the version of the plugin you installed. Turn it off with `"autostart": false` and run the daemon yourself.
+- Autostart (the plugin, and the Codex hooks) runs `npx -y swarmstead@<version>` with exactly the version you installed. Turn it off with `"autostart": false` and run the daemon yourself.
+- The plugin shows one line with the village's address when a session starts or resumes. It goes to you, not into Claude's context. `/village` opens that address in your browser.
 - Deciding an approval always needs the token in `~/.swarmstead/token` (created with mode 0600). With `--lan`, every API call from another device needs it too. Use a long, secret ntfy topic: anyone who knows the topic can read the pushes.
 
 ## Documentation

@@ -24,7 +24,7 @@ const { forecastRun, forecastBlock, forecastLimit } = await import('../core/fore
 const { postmortem, postmortemMarkdown } = await import('../core/postmortem.js');
 const { Replay, parseEvents } = await import('../web/replay.js');
 const { startDaemon } = await import('../server/daemon.js');
-const { installClaude, uninstallClaude, installGit, uninstallGit, claudePluginInstalled } = await import('../server/install.js');
+const { installClaude, uninstallClaude, installGit, uninstallGit, claudePluginInstalled, installCodex, uninstallCodex } = await import('../server/install.js');
 
 const T = 1_800_000_000_000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -430,13 +430,29 @@ test('installer: hooks installed from the npx cache point at a stable copy in ~/
     assert.ok(commands.some((c) => c.includes(copy)), name);
     assert.equal(fs.readFileSync(copy, 'utf8'), fs.readFileSync(path.join(ROOT, 'plugin', 'hooks', name), 'utf8'));
   }
+
+  // Codex: the autostart copy is told which package to run, since no plugin.json sits beside it
+  const before = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-codex-'));
+  try {
+    fromNpx.installCodex();
+    const codex = JSON.parse(fs.readFileSync(path.join(process.env.CODEX_HOME, 'hooks.json'), 'utf8'));
+    const up = codex.hooks.SessionStart.flatMap((g) => g.hooks).find((h) => h.command.includes('swarmstead-up.mjs'));
+    const { version } = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+    assert.ok(up.command.includes(path.join(home, 'hooks', 'swarmstead-up.mjs')) && !up.command.includes(pkg), up.command);
+    assert.ok(up.command.endsWith(` swarmstead@${version}`), up.command);
+    assert.ok(fs.existsSync(path.join(home, 'hooks', 'swarmstead-up.mjs')));
+  } finally {
+    if (before === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = before;
+  }
 });
 
-test('plugin autostart: starts the daemon when none answers, only once, and never with "autostart": false', async () => {
+test('plugin autostart: starts the daemon when none answers, only once, never with "autostart": false, and shows the address when asked', async () => {
   const script = path.join(ROOT, 'plugin', 'hooks', 'swarmstead-up.mjs');
   const port = await new Promise((resolve) => { const srv = net.createServer().listen(0, '127.0.0.1', () => { const { port } = srv.address(); srv.close(() => resolve(port)); }); });
   const url = `http://127.0.0.1:${port}`;
-  const run = (h) => spawnSync(process.execPath, [script], { input: '{"hook_event_name":"SessionStart"}', env: { ...process.env, SWARMSTEAD_HOME: h, SWARMSTEAD_URL: url }, timeout: 5000 });
+  const run = (h, args = [], source = 'startup') => spawnSync(process.execPath, [script, ...args], { input: JSON.stringify({ hook_event_name: 'SessionStart', source }), env: { ...process.env, SWARMSTEAD_HOME: h, SWARMSTEAD_URL: url }, timeout: 5000 });
+  const said = (r) => { const out = String(r.stdout).trim(); return out ? JSON.parse(out).systemMessage : ''; };
   const homeWith = (cfg) => {
     const h = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-up-'));
     fs.writeFileSync(path.join(h, 'config.json'), JSON.stringify({ claude: { transcripts: path.join(h, 'none') }, codex: { sessions: path.join(h, 'none') }, ...cfg }));
@@ -448,6 +464,7 @@ test('plugin autostart: starts the daemon when none answers, only once, and neve
   const r0 = run(off);
   assert.equal(r0.status, 0);
   assert.ok(!fs.existsSync(path.join(off, 'autostart.lock')), 'opted out: nothing started');
+  assert.match(said(run(off, ['--say'])), /isn't running \("autostart" is off\)/);
 
   const on = homeWith({});
   const r1 = run(on);
@@ -461,6 +478,14 @@ test('plugin autostart: starts the daemon when none answers, only once, and neve
     assert.ok(up, 'the daemon came up from this source checkout');
     assert.equal(run(on).status, 0);
     assert.equal(Number(fs.readFileSync(lock, 'utf8')), pid, 'a running daemon is left alone');
+
+    // the plugin's --say: one line for the user when a session starts or resumes, never on /clear or compaction
+    assert.equal(said(run(on, ['--say'])), `🏘 Swarmstead village: ${url}/web/ · /village opens it`);
+    assert.match(said(run(on, ['--say'], 'resume')), /village/);
+    assert.equal(said(run(on, ['--say'], 'compact')), '');
+    assert.equal(said(run(on, ['--say'], 'clear')), '');
+    assert.equal(said(run(homeWith({ reminder: false }), ['--say'])), '', '"reminder": false');
+    assert.equal(String(run(on).stdout), '', 'without --say (Codex) it never prints');
   } finally {
     try { process.kill(pid); } catch {}
   }
@@ -479,5 +504,27 @@ test('installer: recognises the plugin from Claude Code\'s installed_plugins.jso
     assert.equal(claudePluginInstalled(), true);
   } finally {
     if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = before;
+  }
+});
+
+test('installer: Codex hooks start the daemon on SessionStart, once, and uninstall removes everything', () => {
+  const before = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-codex-'));
+  const file = path.join(process.env.CODEX_HOME, 'hooks.json');
+  fs.writeFileSync(file, JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo mine' }] }] } }));
+  try {
+    installCodex();
+    installCodex();
+    const ups = (s) => s.hooks.SessionStart.flatMap((g) => g.hooks).filter((h) => h.command.includes('swarmstead-up.mjs'));
+    let s = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.equal(ups(s).length, 1, 'reinstalling keeps a single autostart hook');
+    assert.ok(ups(s)[0].command.includes(path.join(ROOT, 'plugin', 'hooks', 'swarmstead-up.mjs')), 'a source checkout runs its own script');
+    assert.ok(s.hooks.SessionStart.some((g) => g.hooks.some((h) => h.command === 'echo mine')), 'keeps your hooks');
+    uninstallCodex();
+    s = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.ok(!JSON.stringify(s).includes('swarmstead'), 'nothing of ours left');
+    assert.ok(s.hooks.SessionStart.some((g) => g.hooks.some((h) => h.command === 'echo mine')));
+  } finally {
+    if (before === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = before;
   }
 });

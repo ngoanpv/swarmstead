@@ -1,5 +1,5 @@
 {
-  "description": "Forward Claude Code lifecycle events to the local Swarmstead daemon (http://127.0.0.1:4317), starting it on SessionStart if needed. Async, never blocks, never prints.",
+  "description": "Forward Claude Code lifecycle events to the local Swarmstead daemon (http://127.0.0.1:4317). The forwarders are async and never print. On SessionStart one quick synchronous hook starts the daemon if needed and shows the village address.",
   "hooks": {
     "SessionStart": [
       {
@@ -12,9 +12,8 @@
           },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-up.mjs\"",
-            "timeout": 10,
-            "async": true
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-up.mjs\" --say",
+            "timeout": 10
           }
         ]
       }

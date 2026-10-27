@@ -14,9 +14,11 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const HOOK_SCRIPT = path.join(ROOT, 'plugin', 'hooks', 'swarmstead-hook.mjs');
 export const GATE_SCRIPT = path.join(ROOT, 'plugin', 'hooks', 'swarmstead-gate.mjs');
 export const GIT_SCRIPT = path.join(ROOT, 'plugin', 'hooks', 'swarmstead-git.mjs');
+export const UP_SCRIPT = path.join(ROOT, 'plugin', 'hooks', 'swarmstead-up.mjs');
 export const HOOK_MARKER = 'swarmstead-hook.mjs';
 export const GATE_MARKER = 'swarmstead-gate.mjs';
-const MARKERS = [HOOK_MARKER, GATE_MARKER];
+const MARKERS = [HOOK_MARKER, GATE_MARKER, 'swarmstead-up.mjs'];
+const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
 
 // `npx swarmstead` runs from a cache npm may clear, so hooks installed from
 // there point at a copy in ~/.swarmstead/hooks (the scripts only need node:*).
@@ -41,6 +43,11 @@ function hookCommand(provider) {
 
 function gateCommand() {
   return `"${process.execPath}" "${stable(GATE_SCRIPT)}"`;
+}
+
+// The copy in ~/.swarmstead/hooks has no plugin.json beside it, so it is told which package to run.
+function upCommand() {
+  return `"${process.execPath}" "${stable(UP_SCRIPT)}" swarmstead@${VERSION}`;
 }
 
 function readJsonFile(file) {
@@ -153,6 +160,8 @@ export function installCodex() {
   const file = codexHooksPath();
   const data = readJsonFile(file);
   data.hooks = addOurs(data.hooks, CODEX_HOOK_EVENTS, 'codex');
+  // Codex has no plugins, so the daemon autostart rides along on SessionStart (opt out: "autostart": false)
+  data.hooks.SessionStart.push({ hooks: [{ type: 'command', command: upCommand(), timeout: 10, async: true }] });
   backupAndWrite(file, data);
   return { file, events: CODEX_HOOK_EVENTS.length };
 }

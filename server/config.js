@@ -17,7 +17,8 @@ export const DEFAULT_CONFIG = {
   pricing: {},             // see core/pricing.js
   xpMultiplier: 1,
   lan: false,              // listen on your network so your phone can approve (token required)
-  autostart: true,         // plugin only: start the daemon when a Claude Code session starts (plugin/hooks/swarmstead-up.mjs)
+  autostart: true,         // plugin and `install codex`: start the daemon when a session starts (plugin/hooks/swarmstead-up.mjs)
+  reminder: true,          // plugin: one line with the village address when a Claude Code session starts or resumes
   gate: {                  // only used if you installed the gate hook: `swarmstead install claude --gate`
     approvals: true,       // answer permission prompts from the village / phone
     waitSubSec: 120,       // subagent prompts: hold this long for your answer (else Claude Code's default)

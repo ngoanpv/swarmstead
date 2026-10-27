@@ -19,4 +19,4 @@
 - **Chi phí trên mỗi commit / PR** (tab Ledger, `install git`).
 - **Tua lại một ngày** và **post-mortem**: tiền đi đâu, bao nhiêu là lãng phí, chép thành Markdown để chia sẻ.
 
-Cài đặt: chạy `claude plugin marketplace add ngoanpv/swarmstead` rồi `claude plugin install swarmstead@swarmstead`, mở một session Claude Code mới (làng tự khởi động), rồi mở http://127.0.0.1:4317/web/. Kiểm tra bằng `npx swarmstead doctor`, cập nhật bằng `claude plugin update swarmstead@swarmstead`. Chỉ muốn xem thử: `npx swarmstead start --open` rồi thêm `?demo&lang=vi`, hoặc mở [bản demo trực tuyến](https://ngoanpv.github.io/swarmstead/).
+Cài đặt: chạy `claude plugin marketplace add ngoanpv/swarmstead` rồi `claude plugin install swarmstead@swarmstead`, mở một session Claude Code mới (làng tự khởi động và địa chỉ hiện ở đầu session), rồi gõ `/village` hoặc mở http://127.0.0.1:4317/web/. Kiểm tra bằng `npx swarmstead doctor`, cập nhật bằng `claude plugin update swarmstead@swarmstead`. Chỉ muốn xem thử: `npx swarmstead start --open` rồi thêm `?demo&lang=vi`, hoặc mở [bản demo trực tuyến](https://ngoanpv.github.io/swarmstead/).

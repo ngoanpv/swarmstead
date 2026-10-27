@@ -12,6 +12,7 @@
   "notify": { "desktop": true, "ntfy": "https://ntfy.sh/<long-secret-topic>", "publicUrl": "http://192.168.1.20:4317" },
   "lan": false,
   "autostart": true,
+  "reminder": true,
   "pricing": { "my-proxy-model": { "input": 3, "output": 15, "cacheWrite": 3.75, "cacheRead": 0.3 } }
 }
 ```

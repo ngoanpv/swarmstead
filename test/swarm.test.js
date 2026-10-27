@@ -24,8 +24,10 @@ test('never registers hooks that change Claude Code behaviour', () => {
   for (const e of NEVER_REGISTER) assert.ok(!CLAUDE_HOOK_EVENTS.includes(e), e);
   const plugin = JSON.parse(fs.readFileSync(new URL('../plugin/hooks/hooks.json', import.meta.url)));
   assert.deepEqual(Object.keys(plugin.hooks).sort(), [...CLAUDE_HOOK_EVENTS].sort(), 'plugin hooks.json is in sync (npm run gen:hooks)');
-  for (const groups of Object.values(plugin.hooks)) for (const g of groups) for (const h of g.hooks) assert.equal(h.async, true);
-  assert.ok(plugin.hooks.SessionStart[0].hooks.some((h) => h.command.includes('swarmstead-up.mjs')), 'autostart on SessionStart');
+  const up = plugin.hooks.SessionStart[0].hooks.find((h) => h.command.includes('swarmstead-up.mjs'));
+  assert.ok(up, 'autostart on SessionStart');
+  assert.ok(!up.async && up.command.endsWith('--say'), 'sync, so its one-line systemMessage reaches the user');
+  for (const groups of Object.values(plugin.hooks)) for (const g of groups) for (const h of g.hooks) if (h !== up) assert.equal(h.async, true, h.command);
 });
 
 test('the plugin and the npm package share one version (autostart runs swarmstead@<plugin version>)', () => {
