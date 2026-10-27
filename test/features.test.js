@@ -240,8 +240,9 @@ function gate(port, payload) {
   return new Promise((resolve) => {
     const p = spawn(process.execPath, [path.join(ROOT, 'plugin/hooks/swarmstead-gate.mjs')], { env: { ...process.env, SWARMSTEAD_URL: `http://127.0.0.1:${port}` } });
     let out = '';
+    const kill = setTimeout(() => p.kill(), 20_000); // never hang the suite
     p.stdout.on('data', (c) => { out += c; });
-    p.on('close', (code) => resolve({ code, out }));
+    p.on('close', (code) => { clearTimeout(kill); resolve({ code, out }); });
     p.stdin.end(JSON.stringify(payload));
   });
 }

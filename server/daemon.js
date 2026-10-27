@@ -249,6 +249,7 @@ export function startDaemon(overrides = {}) {
         res.write(`data: ${JSON.stringify({ type: 'approvals', approvals: approvals.list() })}\n\n`);
         clients.add(res);
         const ping = setInterval(() => res.write(': ping\n\n'), 20_000);
+        ping.unref?.();
         req.on('close', () => { clearInterval(ping); clients.delete(res); });
         return;
       }
@@ -279,7 +280,10 @@ export function startDaemon(overrides = {}) {
         try { writeJsonAtomic(blocksFile, { past: village.world.pastBlocks }); } catch {}
         logStream?.end();
         for (const c of clients) c.end();
-        return new Promise((r) => server.close(() => r()));
+        clients.clear();
+        const done = new Promise((r) => server.close(() => r()));
+        server.closeAllConnections?.(); // Node 18.2+: don't wait for keep-alive sockets
+        return done;
       };
       resolve({ server, village, approvals, cfg, close, token, url: `http://127.0.0.1:${cfg.port}`, booted });
     });
