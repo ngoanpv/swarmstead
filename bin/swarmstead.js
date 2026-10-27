@@ -82,16 +82,12 @@ ${installClaudeHint}`);
 }
 
 async function hints() {
-  const { claudeInstalled } = await import('../server/install.js');
-  const pluginDir = path.join(os.homedir(), '.claude', 'plugins');
-  const viaPlugin = fs.existsSync(pluginDir) && JSON.stringify(safeList(pluginDir)).includes('swarmstead');
-  const ok = claudeInstalled('user') || viaPlugin;
+  const { claudeInstalled, claudePluginInstalled } = await import('../server/install.js');
+  const ok = claudeInstalled('user') || claudePluginInstalled();
   return {
     installClaudeHint: ok ? '' : `\n  ${c.yellow('Claude Code hooks are not installed yet.')} Run: ${c.bold('npx swarmstead install claude')}\n`,
   };
 }
-
-function safeList(dir) { try { return fs.readdirSync(dir); } catch { return []; } }
 
 async function install(what) {
   const m = await import('../server/install.js');
@@ -148,7 +144,10 @@ async function doctor() {
   const [major] = process.versions.node.split('.').map(Number);
   line(major >= 18, `Node ${process.versions.node} ${major >= 18 ? '' : '(need 18+)'}`);
   line(fs.existsSync(m.HOOK_SCRIPT), `hook script at ${m.HOOK_SCRIPT}`);
-  line(m.claudeInstalled('user') || m.claudeInstalled('project'), 'Claude Code hooks installed (or use the plugin)');
+  const viaPlugin = m.claudePluginInstalled();
+  const viaHooks = m.claudeInstalled('user') || m.claudeInstalled('project');
+  line(viaPlugin || viaHooks, viaPlugin ? 'Claude Code plugin installed' : viaHooks ? 'Claude Code hooks installed' : 'Claude Code not connected: install the plugin (see README) or run: swarmstead install claude');
+  if (viaPlugin && viaHooks) line(false, c.yellow('both the plugin and settings hooks are installed, so every event is counted twice. Keep one: swarmstead uninstall claude'));
   line(fs.existsSync(path.join(os.homedir(), '.claude', 'projects')), 'Claude Code transcripts folder exists');
   line(fs.existsSync(m.codexHooksPath()), `Codex hooks file (${m.codexHooksPath()}) — optional`);
   const health = await get(`http://127.0.0.1:${port}/api/health`).catch(() => null);

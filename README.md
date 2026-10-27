@@ -21,6 +21,8 @@ And the villagers **evolve**, but only through good habits: finished work, few l
 
 > Claude Code first. Codex CLI support is in **beta**. Local-only, zero runtime dependencies, MIT licensed.
 
+**Install:** `claude plugin marketplace add ngoanpv/swarmstead` and `claude plugin install swarmstead@swarmstead`, start a new Claude Code session, then open http://127.0.0.1:4317/web/. [More ways ↓](#install)
+
 **What it does for you every day**
 
 | | Feature | |
@@ -55,38 +57,56 @@ Running agents in parallel creates new problems, and terminal scrollback hides m
 | "Was that worth it?" | Nobody knows what a change cost | Cost per commit and per PR |
 | "Why did today cost $40?" | Scrollback is gone | Replay and a post-mortem with the waste broken out |
 
-## Quick start (Claude Code)
+## Install
 
-Requires **Node 18+**. Connect Claude Code using **one** of these:
+Requires **Node 18+** and Claude Code.
+
+**1. Install the plugin** (in a terminal, or with `/plugin marketplace add …` and `/plugin install …` inside Claude Code):
 
 ```bash
-# A) As a Claude Code plugin (recommended): the daemon starts by itself with your next session
 claude plugin marketplace add ngoanpv/swarmstead
 claude plugin install swarmstead@swarmstead
-
-# B) Or from npm: write the hooks into ~/.claude/settings.json and run the daemon yourself
-npx swarmstead install claude      # add --project for .claude/settings.local.json
-npx swarmstead start --open
 ```
 
-Start a new Claude Code session and open `http://127.0.0.1:4317/web/`. A new villager walks in through the door.
+**2. Start a new Claude Code session.** The plugin starts the village in the background (the first time takes a few seconds while npm fetches it). Later sessions reuse it.
 
-With the plugin, the first session starts the daemon in the background (`npx swarmstead@<plugin version> start`, logged to `~/.swarmstead/daemon.log`) and later sessions reuse it. Turn that off with `"autostart": false` in `~/.swarmstead/config.json`. Plugins from third-party marketplaces don't update on their own: run `claude plugin update swarmstead@swarmstead`, or turn on auto-update in `/plugin` > Marketplaces. Don't combine A and B, or every event is counted twice.
+**3. Open http://127.0.0.1:4317/web/.** Your session walks in through the door as a villager.
 
-Useful extras:
+Nothing there? Run `npx swarmstead doctor` to check the setup, or `npx swarmstead ping` to send a fake session through.
+
+**Just want to look?** Run `npx swarmstead start --open` and add `?demo` to the address for a scripted day in the village (`&hour=22` for night mode, `&lang=vi` for Vietnamese). Or play the [live demo](https://ngoanpv.github.io/swarmstead/) without installing anything.
+
+### Everyday use
+
+| To | Do |
+|---|---|
+| Open the village | http://127.0.0.1:4317/web/ |
+| Check the setup | `npx swarmstead doctor` |
+| Update | `claude plugin update swarmstead@swarmstead`. Third-party plugins don't update on their own; you can turn on auto-update in `/plugin` > Marketplaces. |
+| Find out why the village didn't start | Read `~/.swarmstead/daemon.log` |
+| Run the daemon yourself | Set `"autostart": false` in `~/.swarmstead/config.json`, then `npx swarmstead start` |
+| Uninstall | `claude plugin uninstall swarmstead@swarmstead`. Your config and event log stay in `~/.swarmstead/`; delete it if you want them gone. |
+
+### Without the plugin
+
+Plain hooks in `~/.claude/settings.json` work too, and the approval gate below needs them:
 
 ```bash
-npx swarmstead install claude --gate   # B only: approve prompts from the village/phone + budget brake
-npx swarmstead install git             # optional, inside a repo: book your own commits too
-npx swarmstead start --lan             # optional: reach the village (and approve) from your phone
-npx swarmstead doctor     # check every part of the setup
-npx swarmstead ping       # send a fake mini-session to see the pipeline work
-npx swarmstead uninstall claude
+npx swarmstead install claude      # --project: only this repo's .claude/settings.local.json
+npx swarmstead start --open        # keep it running while you work
 ```
 
-**From source** (to hack on it): `git clone https://github.com/ngoanpv/swarmstead && cd swarmstead && npm run dev` runs the daemon and restarts it on every save. Connect Claude Code with `node bin/swarmstead.js install claude`, or try the plugin for one session with `claude --plugin-dir ./plugin`. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Use the plugin **or** these hooks, not both: with both, every event is counted twice. Update with `npx swarmstead@latest install claude` (plain `npx swarmstead` can reuse an older cached copy). Remove with `npx swarmstead uninstall claude`.
 
-**Just want to look?** Open `http://127.0.0.1:4317/web/?demo` to see a scripted day in the village. You can also build the single-file demo with `npm i --no-save esbuild && npm run build:demo`, then open `dist/swarmstead-demo.html`. Add `&hour=22` to preview night mode and `&lang=vi` for Vietnamese.
+### Optional extras
+
+```bash
+npx swarmstead install claude --gate   # hooks only: approve prompts from the village/phone + budget brake
+npx swarmstead install git             # inside a repo: book your own commits too (cost per commit)
+npx swarmstead start --lan             # reach the village (and approve) from your phone
+```
+
+With the plugin, set `"lan": true` in `~/.swarmstead/config.json` instead of `--lan`. It applies the next time the daemon starts.
 
 ### Codex CLI (beta)
 
@@ -95,6 +115,10 @@ npx swarmstead install codex     # writes ~/.codex/hooks.json
 ```
 
 Codex only runs hooks you have trusted. Open Codex, run `/hooks`, and trust the swarmstead entries. Token usage and rate limits come from `~/.codex/sessions/**/rollout-*.jsonl`.
+
+### From source
+
+`git clone https://github.com/ngoanpv/swarmstead && cd swarmstead && npm run dev` runs the daemon and restarts it on every save. Connect Claude Code with `node bin/swarmstead.js install claude`, or load the plugin for one session with `claude --plugin-dir ./plugin`. Build the single-file demo with `npm i --no-save esbuild && npm run build:demo` (writes `dist/swarmstead-demo.html`). See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## What you're looking at
 
@@ -388,4 +412,4 @@ MIT © [ngoanpv](https://github.com/ngoanpv) and Swarmstead contributors. Fonts:
 - **Chi phí trên mỗi commit / PR** (tab Ledger, `install git`).
 - **Tua lại một ngày** và **post-mortem**: tiền đi đâu, bao nhiêu là lãng phí, chép thành Markdown để chia sẻ.
 
-Cài nhanh: `claude plugin marketplace add ngoanpv/swarmstead` rồi `claude plugin install swarmstead@swarmstead` (daemon tự chạy ở session tiếp theo), hoặc `npx swarmstead install claude` và `npx swarmstead start --open`. Thêm `?demo&lang=vi` để xem bản demo tiếng Việt, hoặc mở [bản demo trực tuyến](https://ngoanpv.github.io/swarmstead/).
+Cài đặt: chạy `claude plugin marketplace add ngoanpv/swarmstead` rồi `claude plugin install swarmstead@swarmstead`, mở một session Claude Code mới (làng tự khởi động), rồi mở http://127.0.0.1:4317/web/. Kiểm tra bằng `npx swarmstead doctor`, cập nhật bằng `claude plugin update swarmstead@swarmstead`. Chỉ muốn xem thử: `npx swarmstead start --open` rồi thêm `?demo&lang=vi`, hoặc mở [bản demo trực tuyến](https://ngoanpv.github.io/swarmstead/).

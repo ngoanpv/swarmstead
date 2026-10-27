@@ -24,7 +24,7 @@ const { forecastRun, forecastBlock, forecastLimit } = await import('../core/fore
 const { postmortem, postmortemMarkdown } = await import('../core/postmortem.js');
 const { Replay, parseEvents } = await import('../web/replay.js');
 const { startDaemon } = await import('../server/daemon.js');
-const { installClaude, uninstallClaude, installGit, uninstallGit } = await import('../server/install.js');
+const { installClaude, uninstallClaude, installGit, uninstallGit, claudePluginInstalled } = await import('../server/install.js');
 
 const T = 1_800_000_000_000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -462,5 +462,21 @@ test('plugin autostart: starts the daemon when none answers, only once, and neve
     assert.equal(Number(fs.readFileSync(lock, 'utf8')), pid, 'a running daemon is left alone');
   } finally {
     try { process.kill(pid); } catch {}
+  }
+});
+
+test('installer: recognises the plugin from Claude Code\'s installed_plugins.json', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-cc-'));
+  const before = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = dir;
+  try {
+    assert.equal(claudePluginInstalled(), false);
+    fs.mkdirSync(path.join(dir, 'plugins'));
+    fs.writeFileSync(path.join(dir, 'plugins', 'installed_plugins.json'), JSON.stringify({ version: 2, plugins: { 'other@x': [] } }));
+    assert.equal(claudePluginInstalled(), false);
+    fs.writeFileSync(path.join(dir, 'plugins', 'installed_plugins.json'), JSON.stringify({ version: 2, plugins: { 'swarmstead@swarmstead': [{ scope: 'user' }] } }));
+    assert.equal(claudePluginInstalled(), true);
+  } finally {
+    if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = before;
   }
 });

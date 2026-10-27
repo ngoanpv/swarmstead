@@ -173,6 +173,14 @@ export function claudeInstalled(scope = 'user') {
   } catch { return false; }
 }
 
+/** Installed as a Claude Code plugin (from any marketplace)? */
+export function claudePluginInstalled() {
+  const dir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+  try {
+    return Object.keys(readJsonFile(path.join(dir, 'plugins', 'installed_plugins.json')).plugins || {}).some((id) => id.startsWith('swarmstead@'));
+  } catch { return false; }
+}
+
 export function gateInstalled(scope = 'user') {
   try {
     return JSON.stringify(readJsonFile(claudeSettingsPath(scope)).hooks || {}).includes(GATE_MARKER);
