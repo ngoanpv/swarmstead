@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://github.com/ngoanpv/swarmstead/actions/workflows/ci.yml"><img src="https://github.com/ngoanpv/swarmstead/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://www.npmjs.com/package/swarmstead"><img src="https://img.shields.io/npm/v/swarmstead?color=cb3837" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/swarmstead"><img src="https://img.shields.io/npm/v/swarmstead?color=7fb3ff" alt="npm version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-b18cff" alt="MIT license"></a>
   <img src="https://img.shields.io/badge/node-%E2%89%A5%2018.17-5fd3c8" alt="Node 18.17 or newer">
   <img src="https://img.shields.io/badge/runtime%20deps-0-ffd34d" alt="Zero runtime dependencies">
@@ -349,7 +349,8 @@ Costs are **estimates** computed from public list prices (`core/pricing.js`, che
 
 - Everything stays on your machine. The daemon binds to `127.0.0.1`, rejects cross-origin POSTs and foreign `Host` headers (DNS rebinding), and serves only `web/` and `core/`.
 - The state holds **summaries only**: file paths, the first 60 characters of a command, a search query. File contents, diffs, prompts and tool output are never stored. Use `"capture": "minimal"` to keep even less.
-- An event log is written to `~/.swarmstead/events/` so you can replay sessions. Turn it off with `"logEvents": false`.
+- **What can leave your machine**, only if you set it up: push notifications to your ntfy topic (`notify.ntfy`) and messages to a Slack or Discord webhook (`notify.webhook`). Each carries an alert's title and one line of text: the agent, the tool and a short detail. Nothing is ever sent to the Swarmstead author.
+- An event log is written to `~/.swarmstead/events/` so you can replay sessions. It stays on your machine until you delete it. Turn it off with `"logEvents": false`.
 - The plugin's autostart runs `npx -y swarmstead@<version>` with exactly the version of the plugin you installed. Turn it off with `"autostart": false` and run the daemon yourself.
 - Deciding an approval always needs the token in `~/.swarmstead/token` (created with mode 0600). With `--lan`, every API call from another device needs it too. Use a long, secret ntfy topic: anyone who knows the topic can read the pushes.
 

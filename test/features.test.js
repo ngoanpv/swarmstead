@@ -418,12 +418,13 @@ test('installer: a git hook in a folder outside the repo (core.hooksPath) is fla
 test('installer: hooks installed from the npx cache point at a stable copy in ~/.swarmstead/hooks', async () => {
   const pkg = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ss-npx-')), '_npx', 'abc123', 'node_modules', 'swarmstead');
   for (const dir of ['core', 'server', 'plugin']) fs.cpSync(path.join(ROOT, dir), path.join(pkg, dir), { recursive: true });
+  fs.copyFileSync(path.join(ROOT, 'package.json'), path.join(pkg, 'package.json')); // "type": "module" (Node 18 doesn't detect ESM)
   const fromNpx = await import(pathToFileURL(path.join(pkg, 'server', 'install.js')));
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-proj-'));
   fromNpx.installClaude({ scope: 'project', cwd, gate: true });
   const s = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.local.json'), 'utf8'));
   const commands = Object.values(s.hooks).flat().flatMap((g) => g.hooks.map((h) => h.command));
-  assert.ok(commands.every((c) => !c.includes('_npx')), 'nothing points into the npx cache');
+  assert.ok(commands.every((c) => !c.includes(pkg)), 'nothing points into the npx cache');
   for (const name of ['swarmstead-hook.mjs', 'swarmstead-gate.mjs']) {
     const copy = path.join(home, 'hooks', name);
     assert.ok(commands.some((c) => c.includes(copy)), name);
