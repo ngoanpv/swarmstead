@@ -95,6 +95,37 @@ test('nested subagents link to the agent that spawned them', () => {
   assert.equal(snap.agents.find((a) => a.id === `${S}:r`).parentId, `${S}:p`);
 });
 
+test('subagents keep the task they were given, twins are numbered, and an idle one raises no context alert', () => {
+  const v = new Village({ now: T });
+  const ad = new ClaudeHookAdapter();
+  feed(v, ad, [
+    { hook_event_name: 'SessionStart' },
+    { hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_use_id: 'a1', tool_input: { subagent_type: 'Explore', description: 'List the TODOs' } },
+    { hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_use_id: 'a2', tool_input: { subagent_type: 'Explore', description: 'Count the lines' } },
+    { hook_event_name: 'SubagentStart', agent_id: 'e1', agent_type: 'Explore' },
+    { hook_event_name: 'SubagentStart', agent_id: 'e2', agent_type: 'Explore' },
+  ]);
+  let snap = v.snapshot(T);
+  const get = (id) => snap.agents.find((a) => a.id === id);
+  assert.match(get(`${S}:e1`).task, /List the TODOs/);
+  assert.match(get(`${S}:e2`).task, /Count the lines/);
+  assert.deepEqual([get(`${S}:e1`).twin, get(`${S}:e2`).twin], [1, 2], 'two Explore agents share a familiar, so they get numbers');
+  assert.equal(get(S).twin, 0, 'a familiar of its own needs no number');
+
+  const e2 = `${S}:e2`;
+  const at = (kind, extra = {}) => ({ v: 1, ts: (T += 400), provider: 'claude', sessionId: S, agentId: e2, kind, ...extra });
+  v.ingest(at(EV.USAGE, { usage: { model: 'claude-haiku-5-5', input: 1000, output: 500, cacheRead: 170000 } }));
+  const ctx = () => v.snapshot(T).alerts.filter((a) => a.kind === 'context' && a.agentId === e2 && !a.resolvedAt);
+  assert.equal(ctx().length, 1, 'a working subagent near its limit is worth a warning');
+  v.ingest(at(EV.TURN_END));
+  v.tick(T += 1000);
+  assert.equal(ctx().length, 0, 'once it is idle there is nothing to compact');
+
+  v.ingest({ v: 1, ts: (T += 400), provider: 'claude', sessionId: S, agentId: `${S}:e1`, kind: EV.SUBAGENT_END });
+  snap = v.snapshot(T);
+  assert.equal(get(e2).twin, 2, 'numbers stay put when a twin leaves');
+});
+
 test('teammates hand messages back and forth without leaving', () => {
   const v = new Village({ now: T });
   const ad = new ClaudeHookAdapter();

@@ -720,12 +720,17 @@ export class WorldView {
 
     this.placeLabels(agents);
     for (const a of agents) this.drawOverlay(x, a, t);
+    const taken = [...(this.labelRects || [])];
     for (const f of this.floaters) {
       const k = f.age / f.life;
       x.globalAlpha = k > 0.7 ? 1 - (k - 0.7) / 0.3 : 1;
       const hw = textWidth(f.text) / 2 + 2;
       const fx = Math.max(hw, Math.min(this.canvas.width - hw, f.x));
-      drawText(x, f.text, fx, Math.max(14, f.y - k * 14), f.color, { outline: '#1b1a2b', align: 'center' });
+      let fy = Math.max(14, f.y - k * 14);
+      // rise above any name, counter or other floater it would cover
+      for (let i = 0; i < 6 && fy > 10 && taken.some((r) => Math.abs(r.x - fx) < r.w / 2 + hw && fy < r.y + r.h && r.y < fy + 8); i++) fy -= 8;
+      taken.push({ x: fx, y: fy, w: hw * 2, h: 8 });
+      drawText(x, f.text, fx, fy, f.color, { outline: '#1b1a2b', align: 'center' });
       x.globalAlpha = 1;
     }
 
@@ -900,25 +905,41 @@ export class WorldView {
     }
   }
 
+  // Names, and the inbox counter above an orchestrator, are stacked so none sit on another.
+  // The rectangles are kept so rising text (XP, ALL REPORTS IN) can steer around them too.
   placeLabels(agents) {
     const placed = [];
+    const free = (x, y, w, h) => !placed.some((r) => Math.abs(r.x - x) < (r.w + w) / 2 && y < r.y + r.h && r.y < y + h);
     for (const a of [...agents].sort((p, q) => q.y - p.y)) {
       const fam = a.fam || {};
       const w = textWidth(this.labelText(a)) + 4;
+      const counter = this.counterText(a);
+      const cw = counter ? textWidth(counter) + 11 : 0;
       let top = Math.round(a.y) - SPRITE_H - (fam.stage >= 4 ? 2 : 0) - 6;
       for (let i = 0; i < 4; i++) {
-        if (!placed.some((r) => Math.abs(r.x - a.x) < (r.w + w) / 2 && Math.abs(r.y - top) < 8)) break;
+        if (free(a.x, top, w, 8) && (!counter || free(a.x, top - 13, cw, 8))) break;
         top -= 8;
       }
-      placed.push({ x: a.x, y: top, w });
+      placed.push({ x: a.x, y: top, w, h: 8 });
+      if (counter) placed.push({ x: a.x, y: top - 13, w: cw, h: 8 });
       a.labelTop = top;
     }
+    this.labelRects = placed;
   }
 
   labelText(a) {
     const fam = a.fam || {};
     const focus = this.selected === a.id || this.hover === a;
-    return (fam.name || '?') + (focus ? ` LV${fam.level || 1}` : '') + (a.squad?.leader ? ` x${a.squad.size}` : '');
+    const twin = a.agent?.twin ? ` ${a.agent.twin}` : '';
+    return (fam.name || '?') + twin + (focus ? ` LV${fam.level || 1}` : '') + (a.squad?.leader ? ` x${a.squad.size}` : '');
+  }
+
+  /** "done/total" over an orchestrator whose run is in flight or just finished (room view). */
+  counterText(a) {
+    const ag = a.agent;
+    if (this.view !== 'room' || ag.parentId || !ag.runId) return '';
+    const r = (this.snapshot?.runs || []).find((x2) => x2.id === ag.runId);
+    return r && (!r.endedAt || (this.snapshot.now - r.endedAt) < 8000) ? `${r.done + r.failed}/${r.total}` : '';
   }
 
   drawOverlay(x, a, t) {
@@ -948,16 +969,14 @@ export class WorldView {
       x.fillRect(bx, by, Math.round(w * left), 2);
     }
     // inbox counter over an orchestrator with a run in flight (room view)
-    if (this.view === 'room' && !ag.parentId && ag.runId) {
-      const r = (this.snapshot?.runs || []).find((x2) => x2.id === ag.runId);
-      if (r && (!r.endedAt || (this.snapshot.now - r.endedAt) < 8000)) {
-        const txt = `${r.done + r.failed}/${r.total}`;
-        const w = textWidth(txt) + 9, bx = cx - Math.round(w / 2), by = top - 18;
-        x.fillStyle = '#1b1a2b'; x.fillRect(bx - 1, by - 1, w + 2, 8);
-        x.fillStyle = this.inboxFlash > 0 ? '#3d5a3d' : '#2b2140'; x.fillRect(bx, by, w, 6);
-        x.fillStyle = '#f4e6c3'; x.fillRect(bx + 1, by + 1, 4, 4); x.fillStyle = '#c99716'; x.fillRect(bx + 1, by + 1, 1, 4);
-        drawText(x, txt, bx + 7, by + 1, r.failed ? '#ffd34d' : '#7dff9a');
-      }
+    const txt = this.counterText(a);
+    if (txt) {
+      const failed = (this.snapshot?.runs || []).find((x2) => x2.id === ag.runId)?.failed;
+      const w = textWidth(txt) + 9, bx = cx - Math.round(w / 2), by = top - 18;
+      x.fillStyle = '#1b1a2b'; x.fillRect(bx - 1, by - 1, w + 2, 8);
+      x.fillStyle = this.inboxFlash > 0 ? '#3d5a3d' : '#2b2140'; x.fillRect(bx, by, w, 6);
+      x.fillStyle = '#f4e6c3'; x.fillRect(bx + 1, by + 1, 4, 4); x.fillStyle = '#c99716'; x.fillRect(bx + 1, by + 1, 1, 4);
+      drawText(x, txt, bx + 7, by + 1, failed ? '#ffd34d' : '#7dff9a');
     }
     // speech bubble
     let icon = a.bubble && t < a.bubble.until ? a.bubble.icon : null;

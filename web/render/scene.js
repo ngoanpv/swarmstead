@@ -287,7 +287,8 @@ export class Scene {
     // name plate
     if (state?.label) {
       x.fillStyle = '#2b2236'; x.fillRect(dx + 4, dy + 15, w - 8, 6);
-      drawText(x, state.label.slice(0, 8), dx + w / 2, dy + 16, state.color || C.gold, { align: 'center' });
+      const plate = state.label.length > 8 ? `${state.label.slice(0, 7)}.` : state.label; // cut names end in a dot
+      drawText(x, plate, dx + w / 2, dy + 16, state.color || C.gold, { align: 'center' });
     }
     // mug
     x.fillStyle = '#ffffff'; x.fillRect(dx + 32, dy + 4, 4, 4); x.fillStyle = '#6b3f2a'; x.fillRect(dx + 33, dy + 5, 2, 1);

@@ -118,7 +118,7 @@ function onFx(fx) {
   for (const f of fx) {
     const ag = f.agentId && state.snap?.agents.find((a) => a.id === f.agentId);
     const fam = ag && state.snap?.familiars?.[ag.familiar];
-    const who = fam?.name || ag?.project || '';
+    const who = fam ? nameOf(ag, fam) : ag?.project || '';
     if (f.fx === 'evolve' || f.fx === 'hatch') addLog(now, `★ ${who} ${f.fx === 'hatch' ? T.ui.hatched : T.ui.evolved} ${f.to}`, 'epic');
     else if (f.fx === 'levelup') addLog(now, `▲ ${who} → ${T.ui.level} ${f.level}`, 'xp');
     else if (f.fx === 'shiny') addLog(now, `✦ ${who} ${T.ui.shiny}`, 'epic');
@@ -126,7 +126,7 @@ function onFx(fx) {
     else if (f.fx === 'alert' && !state.seenAlerts.has(f.alert.id + f.alert.severity)) {
       state.seenAlerts.add(f.alert.id + f.alert.severity);
       addLog(now, `⚠ ${alertText(T, f.alert)}`, 'warn');
-      if (f.alert.severity !== 'info') toast(f.alert);
+      if (f.alert.severity === 'crit') toast(f.alert); // warnings wait on the Monster board, toasts are for what can't
     } else if (f.fx === 'alert.resolve') state.seenAlerts.delete(f.alert.id + f.alert.severity);
   }
 }
@@ -211,6 +211,17 @@ function famOf(ag) {
   return state.snap?.familiars?.[ag.familiar] || { key: ag.familiar, name: '?', form: 'Egg', stage: 0, species: 'egg', level: 1, xp: 0, into: 0, need: 40, genome: { hue: 30, accentHue: 200 } };
 }
 
+// Agents of the same project and type share a familiar; their number tells them apart.
+function nameOf(ag, fam = famOf(ag)) {
+  return `${fam.name}${ag.twin ? ` ${ag.twin}` : ''}`;
+}
+
+// What a subagent was asked to do, without the "<type>: " its card already shows.
+function taskOf(ag) {
+  const t = ag.task || '';
+  return t.startsWith(`${ag.type}: `) ? t.slice(ag.type.length + 2) : t;
+}
+
 function renderSide() {
   const s = state.snap; if (!s) return;
   // finished agents linger briefly (so you see "done"), then drop off the list
@@ -238,9 +249,10 @@ function renderSide() {
     return `<div class="card ${sub ? 'sub' : ''} ${state.selected === ag.id ? 'sel' : ''} ${ag.alive ? '' : 'gone'}" data-id="${esc(ag.id)}">
       <img class="portrait" src="${getPortrait(fam)}" alt="">
       <div style="min-width:0">
-        <div class="name"><b>${esc(fam.name)}</b><span class="form">${esc(fam.form)}</span><span class="lv">${T.ui.level}${fam.level}</span></div>
+        <div class="name"><b>${esc(nameOf(ag, fam))}</b><span class="form">${esc(fam.form)}</span><span class="lv">${T.ui.level}${fam.level}</span></div>
         <div class="meta"><span>${esc(sub ? ag.type : ag.project)}</span>${ag.provider !== 'claude' ? `<span>· ${esc(ag.provider)}</span>` : ''}<span>· ${fmtUsd(ag.cost)}</span>${ag.model ? `<span>· ${esc(shortModel(ag.model))}</span>` : ''}</div>
         <div class="status"><i class="dot" style="background:${STATUS_COLOR[ag.status] || '#999'}"></i><span class="what">${esc(T.status[ag.status] || ag.status)}</span><span class="det">${esc(ag.detail || '')}</span></div>
+        ${sub && ag.task ? `<div class="task" title="${esc(taskOf(ag))}">↳ ${esc(taskOf(ag))}</div>` : ''}
         ${chips(ag)}
         <div class="mini"><span>${T.ui.xp}</span><div class="bar xpbar"><i style="width:${Math.round((fam.into / Math.max(1, fam.need)) * 100)}%"></i></div><span>${fam.into}/${fam.need}</span></div>
         <div class="mini"><span>CTX</span><div class="bar ctxbar ${cls}"><i style="width:${Math.round(pct * 100)}%"></i></div><span>${Math.round(pct * 100)}%</span></div>
@@ -297,7 +309,7 @@ function renderDetail() {
   const pct = ag.context?.window ? Math.round((ag.context.used / ag.context.window) * 100) : 0;
   el.innerHTML = `<div class="detail">
     <div class="top"><img src="${getPortrait(fam)}" alt="">
-      <div><div style="display:flex;justify-content:space-between"><h3>${esc(fam.name)}</h3><button class="x" id="close-detail">✕</button></div>
+      <div><div style="display:flex;justify-content:space-between"><h3>${esc(nameOf(ag, fam))}</h3><button class="x" id="close-detail">✕</button></div>
       <div class="sub">${esc(fam.form)} · ${esc(T.ui.traits[fam.trait] || fam.trait)} · ${esc(STAGES[fam.stage])}</div>
       <div class="mini" style="margin-top:6px"><span>${T.ui.level}${fam.level}</span><div class="bar xpbar"><i style="width:${Math.round((fam.into / Math.max(1, fam.need)) * 100)}%"></i></div><span>${fam.xp} XP</span></div>
       <div class="tags" style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap">${fam.shiny ? '<span class="tag shiny">SHINY</span>' : ''}${fam.corruption >= 0.5 ? '<span class="tag glitch">GLITCH</span>' : ''}${fam.branch === 'zen' ? '<span class="tag zen">ZEN</span>' : ''}${fam.branch === 'alchemist' ? '<span class="tag alch">ALCHEMIST</span>' : ''}${fam.accessory ? `<span class="tag">${esc(fam.accessory)}</span>` : ''}</div></div>
@@ -305,6 +317,7 @@ function renderDetail() {
     <div class="statgrid">${['focus', 'thrift', 'craft', 'cache', 'grit'].map((k) => bar(k, stats[k] || 0)).join('')}</div>
     ${g ? `<div class="gate ${g.ready ? 'ready' : ''}">${esc(T.ui.next)}: ${T.ui.level}${g.level} + ${esc(g.need)} ${g.ready ? '✓' : ''}</div>` : ''}
     <dl class="kv">
+      ${ag.task ? `<dt>${esc(T.ui.party === 'Party' ? 'Task' : 'Nhiệm vụ')}</dt><dd title="${esc(taskOf(ag))}">${esc(taskOf(ag))}</dd>` : ''}
       <dt>${esc(T.ui.party === 'Party' ? 'Doing' : 'Đang làm')}</dt><dd>${esc(T.status[ag.status] || ag.status)} ${esc(ag.detail || '')}</dd>
       <dt>${esc(T.ui.model)}</dt><dd>${esc(ag.model || '—')}${ag.effort ? ` · ${esc(ag.effort)}` : ''}</dd>
       ${ag.mode ? `<dt>Mode</dt><dd>${esc(T.ui.mode[ag.mode] || ag.mode)}</dd>` : ''}
@@ -578,9 +591,10 @@ function howTo() {
 
 let bannerTimer = 0;
 function showBanner(a, f) {
+  if (f.fx === 'hatch') return; // every new familiar hatches after its first turn: the quest log has it
   const fam = state.snap?.familiars?.[a.agent.familiar];
   const el = $('banner');
-  el.innerHTML = `<div class="t1">${f.fx === 'hatch' ? 'HATCHED!' : 'EVOLUTION!'}</div>
+  el.innerHTML = `<div class="t1">EVOLUTION!</div>
     ${fam ? `<img src="${getPortrait(fam)}" alt="">` : ''}
     <div class="t2">${esc(fam?.name || '')} ${esc(f.fx === 'hatch' ? T.ui.hatched : T.ui.evolved)} ${esc(f.to)}</div>
     <div class="t3">${esc(f.from)} → ${esc(f.to)} · ${esc(STAGES[f.stage] || '')}</div>`;
@@ -591,13 +605,12 @@ function showBanner(a, f) {
 
 function toast(al) {
   const el = document.createElement('div');
-  el.className = `toast ${al.severity === 'crit' ? '' : 'warn'}`;
   el.className = `toast ${al.severity === 'crit' ? '' : al.severity === 'info' ? 'info' : 'warn'}`;
   const head = al.severity === 'crit' ? '⚠ CRITICAL' : al.severity === 'info' ? '★ ARENA' : al.custom ? '•' : '⚠ WARNING';
   el.innerHTML = `<b style="color:${al.severity === 'crit' ? 'var(--red)' : al.severity === 'info' ? 'var(--violet)' : 'var(--gold)'}">${head}</b>${esc(al.custom || alertText(T, al))}`;
   $('toasts').appendChild(el);
-  setTimeout(() => el.remove(), 6500);
-  while ($('toasts').children.length > 3) $('toasts').firstChild.remove();
+  setTimeout(() => el.remove(), 5000);
+  while ($('toasts').children.length > 2) $('toasts').firstChild.remove();
 }
 
 // ---------------------------------------------------------------- controls & i18n

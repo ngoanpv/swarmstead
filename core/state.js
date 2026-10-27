@@ -123,6 +123,7 @@ export class World {
       mood: 'ok',
       mode: '', effort: '', background: 0, crons: 0, team: '', teammate: '', stage: '', workflow: '',
       exhausted: null, source: '', runId: null, outcome: null,
+      task: '', twin: 0, twinOf: '', twinShown: 0,
     };
     a.familiar = familiarKey(a);
     this.agents.set(a.id, a);
@@ -318,6 +319,7 @@ export class World {
           this.log(ts, parent.id, `delegated to ${a.type}${ev.detail ? ': ' + ev.detail : ''}`);
           this.joinRun(parent, a, ev, ts, fx);
         }
+        a.task = ev.detail || '';
         a.turn = newTurn(ts);
         this.setStatus(a, STATUS.THINKING, ts);
         break;
@@ -747,7 +749,28 @@ export class World {
     };
   }
 
+  /**
+   * Live agents that share a familiar (same project + agent type) look and are named alike, so
+   * each gets a number that it keeps while it lives: OHE, then OHE 1 / OHE 2 once a twin shows up.
+   */
+  numberTwins() {
+    const live = this.order.map((id) => this.agents.get(id)).filter((a) => a?.alive);
+    const used = new Map();
+    const take = (fam, n) => { if (!used.has(fam)) used.set(fam, new Set()); used.get(fam).add(n); };
+    for (const a of live) if (a.twin && a.twinOf === a.familiar) take(a.familiar, a.twin);
+    for (const a of live) {
+      if (a.twin && a.twinOf === a.familiar) continue;
+      let n = 1;
+      while (used.get(a.familiar)?.has(n)) n++;
+      a.twin = n; a.twinOf = a.familiar; take(a.familiar, n);
+    }
+    const count = new Map();
+    for (const a of live) count.set(a.familiar, (count.get(a.familiar) || 0) + 1);
+    for (const a of live) a.twinShown = count.get(a.familiar) > 1 || a.twin > 1 ? a.twin : 0;
+  }
+
   snapshot(now = this.lastTs) {
+    this.numberTwins();
     const agents = this.order.filter((id) => this.agents.has(id)).map((id) => {
       const a = this.agents.get(id);
       return {
@@ -759,7 +782,7 @@ export class World {
         familiar: a.familiar, mood: a.mood, turnCost: a.turn.cost, turnTools: a.turn.tools,
         mode: a.mode, effort: a.effort, background: a.background, crons: a.crons, team: a.team, teammate: a.teammate,
         stage: a.stage, workflow: a.workflow, title: a.title || '', exhausted: a.exhausted, source: a.source, runId: a.runId, outcome: a.outcome,
-        parallel: Object.keys(a.openTools).length,
+        parallel: Object.keys(a.openTools).length, task: a.task, twin: a.twinShown,
       };
     });
     const runs = [...this.runs.values()]

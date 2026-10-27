@@ -129,9 +129,9 @@ export class Detectors {
         });
       }
 
-      // 4. Context window pressure.
+      // 4. Context window pressure. A subagent that isn't working has nothing left to compact.
       const pct = a.context.window ? a.context.used / a.context.window : 0;
-      if (pct >= t.contextWarn) add(`context:${a.id}`, 'context', pct >= t.contextCrit ? 'crit' : 'warn', a, { who, pct: Math.round(pct * 100) });
+      if (pct >= t.contextWarn && (!a.parentId || BUSY.has(a.status))) add(`context:${a.id}`, 'context', pct >= t.contextCrit ? 'crit' : 'warn', a, { who, pct: Math.round(pct * 100) });
 
       // 5. Blocked on a permission prompt (silent killer for background subagents).
       if (a.status === STATUS.PERMISSION && a.permissionSince && now - a.permissionSince > t.permissionMs) {
