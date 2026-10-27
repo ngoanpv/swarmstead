@@ -1,6 +1,14 @@
-<p align="center"><img src="docs/brand/icon-256.png" width="128" height="128" alt="Swarmstead icon: a fox-eared pixel cottage"></p>
+<p align="center">
+  <img src="docs/brand/social-preview.png" alt="Swarmstead: your Claude Code and Codex agents as a living pixel village" width="100%">
+</p>
 
-<h1 align="center">Swarmstead</h1>
+<p align="center">
+  <a href="https://github.com/ngoanpv/swarmstead/actions/workflows/ci.yml"><img src="https://github.com/ngoanpv/swarmstead/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-b18cff" alt="MIT license"></a>
+  <img src="https://img.shields.io/badge/node-%E2%89%A5%2018.17-5fd3c8" alt="Node 18.17 or newer">
+  <img src="https://img.shields.io/badge/runtime%20deps-0-ffd34d" alt="Zero runtime dependencies">
+  <a href="https://ngoanpv.github.io/swarmstead/"><img src="https://img.shields.io/badge/demo-play%20in%20browser-f08a3e" alt="Play the demo"></a>
+</p>
 
 **Watch your coding agents work as a living pixel village.** Every Claude Code session moves into the workshop as a little character. Subagents step out of a portal, carry scrolls back to their lead, and fight bug monsters when tests fail. Coins fly into a treasure chest as tokens are spent. When something goes wrong (a loop, a stuck permission prompt, context about to overflow, two agents editing the same file), you see it before it costs you.
 
@@ -336,6 +344,24 @@ Costs are **estimates** computed from public list prices (`core/pricing.js`, che
 ## Contributing
 
 PRs are welcome, especially new detectors, adapters, sprites and translations. See [CONTRIBUTING.md](CONTRIBUTING.md). Run `npm test` before you open a PR.
+
+## Logo
+
+<p>
+  <img src="docs/brand/icon-256.png" width="128" height="128" alt="Swarmstead icon, 256 px">
+  <img src="docs/brand/icon-64.png" width="64" height="64" alt="Swarmstead icon, 64 px">
+  <img src="docs/brand/icon-32.png" width="32" height="32" alt="Swarmstead icon, 32 px">
+</p>
+
+A fox-eared cottage (the *stead*) with glowing window eyes, and a few sparks around it (the *swarm*). It is pixel art on a 32×32 grid, so scale it by whole numbers with nearest-neighbour filtering (`image-rendering: pixelated`).
+
+| File | Use |
+|---|---|
+| [`docs/brand/icon.svg`](docs/brand/icon.svg) | Vector, any size |
+| [`docs/brand/icon-512.png`](docs/brand/icon-512.png) · [`256`](docs/brand/icon-256.png) · [`64`](docs/brand/icon-64.png) · [`32`](docs/brand/icon-32.png) | App icons, avatars, favicons |
+| [`docs/brand/social-preview.png`](docs/brand/social-preview.png) | 1280×640 banner: README header and GitHub social preview |
+
+Regenerate them with `python3 scripts/brand/make-icon.py` (needs Pillow). The logo is under the same MIT licence as the code.
 
 ## Credits & license
 
