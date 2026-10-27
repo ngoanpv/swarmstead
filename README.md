@@ -337,7 +337,7 @@ PRs are welcome, especially new detectors, adapters, sprites and translations. S
 
 ## Credits & license
 
-MIT © Swarmstead contributors. Fonts: [Pixelify Sans](https://github.com/eifetx/Pixelify-Sans) and [Silkscreen](https://kottke.org/plus/type/silkscreen/), both under the SIL Open Font License (see `web/fonts/`). Inspired by the community's pixel-office and observability experiments around Claude Code.
+MIT © [ngoanpv](https://github.com/ngoanpv) and Swarmstead contributors. Fonts: [Pixelify Sans](https://github.com/eifetx/Pixelify-Sans) and [Silkscreen](https://kottke.org/plus/type/silkscreen/), both under the SIL Open Font License (see `web/fonts/`). Inspired by the community's pixel-office and observability experiments around Claude Code.
 
 ---
 
