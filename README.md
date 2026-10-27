@@ -1,4 +1,6 @@
-# 🏘 Swarmstead
+<p align="center"><img src="docs/brand/icon-256.png" width="128" height="128" alt="Swarmstead icon: a fox-eared pixel cottage"></p>
+
+<h1 align="center">Swarmstead</h1>
 
 **Watch your coding agents work as a living pixel village.** Every Claude Code session moves into the workshop as a little character. Subagents step out of a portal, carry scrolls back to their lead, and fight bug monsters when tests fail. Coins fly into a treasure chest as tokens are spent. When something goes wrong (a loop, a stuck permission prompt, context about to overflow, two agents editing the same file), you see it before it costs you.
 
