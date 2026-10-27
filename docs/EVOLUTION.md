@@ -4,6 +4,39 @@ The goal is a pet that **reflects how well an agent works**, not how much it wor
 
 All of the code is in `core/evolution.js` and is pure and deterministic. The same turn summaries always produce the same roster, so the roster can be rebuilt from the event log and is easy to test (`test/core.test.js`).
 
+## At a glance
+
+Each **agent identity** (provider + project + agent type, e.g. `claude:shop-api:code-reviewer`) owns a *familiar* that persists across sessions in `~/.swarmstead/roster.json`.
+
+```
+xp per finished turn = 10 × work × quality × thrift × cache  +  15 × bugs slain  +  clean bonus
+```
+
+- **work**: edits, runs and delegations, capped. Busywork cannot farm XP.
+- **quality**: penalised by loops, repeated errors and forced compactions.
+- **thrift**: this turn's cost-per-work compared with the familiar's *own* moving average. Spending more never earns more.
+- **cache**: a small bonus for good prompt-cache reuse.
+
+**Behaviour decides the species**, and **quality gates decide whether it can evolve**:
+
+| Work style | Species | Egg → Hatchling → Adept → Master (Zen / Alchemist) → Legend |
+|---|---|---|
+| reading & research | Owl | Hootlet → Scribowl → Sage Owl / Alchemowl → Oracle of Tomes / Golden Grimoire |
+| writing code | Fox | Kit → Codefox → Zen Kitsune / Forgefox → Ninetail / Sunforge Kitsune |
+| running commands | Bot | Boltling → Gearbot → Zen Golem / Brass Automaton → Synthwarden / Gilded Colossus |
+| web & tools | Bunny | Hopper → Scoutbun → Moonhare / Treasure Hare → Star Strider / Comet Hare |
+| delegating | Cat | Kitten → Captain Cat → Zen Sphinx / Merchant Lion → Celestial Sphinx / Sun King |
+
+**Swarms can't farm XP.** A subagent's XP is multiplied by √(4 / swarm size) once a run has more than 4 agents. The orchestrator instead gets one **fan-in bonus** when the whole run has reported back: 20 × √agents (capped at 10) × the run's success rate.
+
+Master requires **Focus ≥ 55**, so a loopy agent stays Adept forever. Legend requires a **10-turn clean streak**. A clean streak also makes a familiar **shiny**. Loops leave a visible **glitch** that heals with clean turns.
+
+![The Bestiary](images/evolution.gif)
+
+![Sprites](images/sprites.png)
+
+Every sprite is generated procedurally from a genome (no image assets), so the project needs no paid tilesets and every familiar looks different.
+
 ## Identity
 
 A familiar is keyed by `provider:project:agentType`:

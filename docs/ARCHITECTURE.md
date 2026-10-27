@@ -1,5 +1,26 @@
 # Architecture
 
+## How it works
+
+```mermaid
+flowchart LR
+  CC[Claude Code] -- async hooks --> H[swarmstead-hook.mjs]
+  CX[Codex CLI] -- hooks.json --> H
+  H -- POST /api/hook --> D[daemon :4317]
+  T[(transcripts / rollouts)] -- tail --> D
+  D --> E[core: World + Detectors + Evolution]
+  E -- SSE --> UI[pixel village in your browser]
+  E --> R[(roster.json, events/*.jsonl)]
+```
+
+- **Hooks** give accurate state: tool start and end, permission prompts, subagent start and stop, compaction, turn end. They're registered with `async: true`, never print, and always exit 0, so they cannot slow down or change your agent. The only exception is the **gate**, which you add on purpose with `--gate`: it is synchronous so it can return your decision, and it fails open.
+- **Transcripts** give tokens, model, and context size (Claude Code `~/.claude/projects/**.jsonl`, deduplicated by message id; Codex rollouts).
+- **core/** is plain ES modules shared by the daemon and the browser. The demo runs the same engine in the page.
+
+The event schema and how to feed events from your own tools are in [EVENTS.md](EVENTS.md).
+
+## Layout
+
 ```
 swarmstead/
 ├─ bin/swarmstead.js        CLI: start [--lan], install claude [--gate] / git / codex, uninstall, doctor, ping
@@ -45,6 +66,30 @@ swarmstead/
 6. **Broadcast**: effects are sent immediately over SSE. Snapshots are throttled to 2.5/s, and the roster is sent and saved every 2 s when it changes.
 7. **Persistence**: finished runs append to `~/.swarmstead/runs.jsonl` (forecast history), finished 5-hour blocks to `blocks.json`, and every event to `events/<local-day>.jsonl` (replay).
 8. **Browser**: `WorldView` maps each agent's status to a place in the room. A new activity must persist 550 ms before the villager walks there, so a burst of tool calls doesn't make it jitter. Effects become animations.
+
+## Claude Code coverage
+
+| Signal | Source | Shown as |
+|---|---|---|
+| Session start / resume / fork / end, prompts, turn end | `SessionStart` `SessionEnd` `UserPromptSubmit` `Stop` | arrival at the door, "RESUMED"/"FORKED", ✓ bubble, XP |
+| Every tool call, success or failure, interrupts | `PreToolUse` `PostToolUse` `PostToolUseFailure` | walking to stations, bug monsters, loop/error detectors |
+| Parallel tool calls | overlapping `PreToolUse` | afterimages, `×N` |
+| Permission prompts and denials | `PermissionRequest` `Notification:permission_prompt` `PermissionDenied` | `!` bubble, raised hand, ✕ bubble |
+| Waiting for you, MCP elicitation | `Notification:idle_prompt` `Elicitation` | `?` bubble, coffee machine |
+| API failures | `StopFailure` | "out of stamina" |
+| Subagents, nested subagents | `SubagentStart` / `SubagentStop` with `agent_id`, plus `agent-*.meta.json` | portal, scrolls, queue, outcomes |
+| Workflows | `Workflow` tool result, workflow journal and scripts on disk | Arena, stages, timeline |
+| Agent teams | `TeammateIdle` `TaskCreated` `TaskCompleted`, `~/.claude/teams/*/config.json` | teammates stay in the room; messages are handoffs |
+| Compaction | `PreCompact` `PostCompact` | sleeping villager, `compactRisk` |
+| Model switches, permission mode, effort | `PostModelSwitch`, `permission_mode`, `effort.level` on every payload | floater, name badge, side panel |
+| Background tasks, crons | `background_tasks` `session_crons` on `Stop` | orbs at the feet |
+| Worktrees | worktree paths in `cwd` (`.claude/worktrees/<name>`), `CwdChanged` | green desk plate, no false collisions |
+| Tokens, cost, model, context, thinking | transcripts (deduplicated by message id), workflow agent transcripts | coins, HP bar, totals |
+| Permission decisions (opt-in gate) | synchronous `PermissionRequest` hook, `PreToolUse` on `Agent\|Task\|Workflow` | approvals panel, phone pushes, budget brake |
+| "Tests pass" claims | `last_assistant_message` on `Stop` / `SubagentStop` (only a boolean is kept) | `unverified` |
+| Commits and PRs | agent `git commit` / `gh pr` commands, optional git `post-commit` hook | Ledger, gold parcel |
+
+Swarmstead **never** registers `WorktreeCreate`, `WorktreeRemove` or `PreModelSwitch`. Registering a `WorktreeCreate` hook replaces Claude Code's own git-worktree creation, and the other two can change behaviour too, so `npm test` checks that they stay out.
 
 ## Status → place
 
