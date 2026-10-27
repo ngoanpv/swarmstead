@@ -1,0 +1,43 @@
+{
+  "name": "agent-village",
+  "version": "0.1.0",
+  "description": "Watch your Claude Code (and Codex) agents live as pixel characters: handoffs, cost, loops, stuck permissions, context pressure — and familiars that evolve with good habits.",
+  "type": "module",
+  "bin": {
+    "agent-village": "bin/agent-village.js"
+  },
+  "files": [
+    "bin",
+    "core",
+    "server",
+    "web",
+    "plugin",
+    ".claude-plugin",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start": "node bin/agent-village.js start",
+    "dev": "node bin/agent-village.js start --open",
+    "test": "node --test",
+    "build:demo": "node scripts/build-demo.js"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "ai-agents",
+    "observability",
+    "pixel-art",
+    "multi-agent",
+    "token-usage",
+    "cost-tracking",
+    "hooks",
+    "gamification"
+  ],
+  "license": "MIT",
+  "devDependencies": {}
+}

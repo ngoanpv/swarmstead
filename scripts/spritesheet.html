@@ -1,0 +1,26 @@
+<!doctype html><meta charset="utf-8"><title>Sprite sheet</title>
+<style>body{background:#2b2a3a;margin:0;padding:8px;font:12px monospace;color:#ddd}canvas{image-rendering:pixelated}</style>
+<canvas id="c"></canvas>
+<script type="module">
+import { getSprite, SPRITE_W, SPRITE_H } from '../web/render/sprites.js';
+const species=['egg','owl','fox','bot','bunny','cat'];
+const S=5, cols=12;
+const c=document.getElementById('c'); c.width=cols*SPRITE_W*S; c.height=(species.length*2)*SPRITE_H*S+20;
+const x=c.getContext('2d'); x.imageSmoothingEnabled=false;
+let row=0;
+const genome=(h,p,e)=>({hue:h,accentHue:(h+170)%360,pattern:p,eyes:e});
+for(const sp of species){
+  const variants=[];
+  for(let st=sp==='egg'?0:1; st<=4 && variants.length<5; st++){
+    if(sp==='egg'&&st>0)break;
+    variants.push({key:sp+st,species:sp,stage:st,branch:st>=3?(st%2?'zen':'alchemist'):null,accessory:st>=2?['glasses','hammer','antenna','scarf','cape'][species.indexOf(sp)%5]:null,genome:genome(40*species.indexOf(sp)+20,['spots','plain','stripes','mask','belly'][st%5],['big','dot','happy','sparkle'][st%4]),shiny:false,corruption:0});
+  }
+  variants.push({...variants[variants.length-1],key:sp+'shiny',shiny:true});
+  variants.push({...variants[0],key:sp+'corrupt',corruption:0.8});
+  let col=0;
+  for(const v of variants){ x.drawImage(getSprite(v,'idle',0,''),col*SPRITE_W*S,row*SPRITE_H*S,SPRITE_W*S,SPRITE_H*S); col++; }
+  for(const pose of ['walk','work','cheer','sleep']){ x.drawImage(getSprite(variants[Math.min(1,variants.length-1)],pose,pose==='walk'?0:1,pose==='sleep'?'sleep':''),col*SPRITE_W*S,row*SPRITE_H*S,SPRITE_W*S,SPRITE_H*S); col++; }
+  row+=1;
+}
+document.title='ready';
+</script>

@@ -1,0 +1,16 @@
+{
+  "name": "agent-village",
+  "version": "0.1.0",
+  "description": "Watch your coding agents live as pixel characters that work, hand off, evolve, and warn you about loops, stuck permissions, context pressure and cost.",
+  "author": {
+    "name": "Agent Village contributors"
+  },
+  "license": "MIT",
+  "keywords": [
+    "observability",
+    "pixel-art",
+    "multi-agent",
+    "cost",
+    "hooks"
+  ]
+}

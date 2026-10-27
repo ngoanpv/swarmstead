@@ -1,0 +1,13 @@
+{
+  "name": "agent-village",
+  "owner": {
+    "name": "Agent Village contributors"
+  },
+  "plugins": [
+    {
+      "name": "agent-village",
+      "source": "./plugin",
+      "description": "Pixel-art observability for Claude Code: live characters, handoffs, cost, issue detection and evolving familiars."
+    }
+  ]
+}
