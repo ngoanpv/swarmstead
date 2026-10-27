@@ -1,0 +1,31 @@
+name: release
+# Push a tag like v0.3.0 (or v0.3.0-beta.1 for the `next` channel) to publish to npm.
+# Uses npm trusted publishing (OIDC): no npm token is stored in the repo. Set it up once on
+# npmjs.com > swarmstead > Settings > Trusted publishing: GitHub Actions, ngoanpv/swarmstead, release.yml.
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with: { node-version: 24, registry-url: 'https://registry.npmjs.org' }
+      - run: npm install -g npm@latest # trusted publishing needs npm 11.5.1+
+      - name: Tag matches package.json
+        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+      - run: npm test
+      - name: The packed tarball runs through npx
+        run: |
+          npm pack --pack-destination "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP" && npx -y --package="$RUNNER_TEMP/swarmstead-${GITHUB_REF_NAME#v}.tgz" swarmstead doctor
+      - name: Publish
+        run: |
+          tag=latest
+          case "${GITHUB_REF_NAME}" in *-*) tag=next ;; esac
+          npm publish --access public --tag "$tag"

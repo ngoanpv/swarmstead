@@ -1,6 +1,6 @@
 {
   "name": "swarmstead",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Watch your coding agents live as pixel characters that work, hand off, evolve, and warn you about loops, stuck permissions, context pressure and cost.",
   "author": {
     "name": "ngoanpv",

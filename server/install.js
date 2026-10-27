@@ -8,6 +8,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { CLAUDE_HOOK_EVENTS } from './adapters/claude-hooks.js';
+import { HOME } from './config.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const HOOK_SCRIPT = path.join(ROOT, 'plugin', 'hooks', 'swarmstead-hook.mjs');
@@ -17,6 +18,17 @@ export const HOOK_MARKER = 'swarmstead-hook.mjs';
 export const GATE_MARKER = 'swarmstead-gate.mjs';
 const MARKERS = [HOOK_MARKER, GATE_MARKER];
 
+// `npx swarmstead` runs from a cache npm may clear, so hooks installed from
+// there point at a copy in ~/.swarmstead/hooks (the scripts only need node:*).
+const FROM_NPX = /[\\/]_npx[\\/]/.test(ROOT);
+function stable(script) {
+  if (!FROM_NPX) return script;
+  const copy = path.join(HOME, 'hooks', path.basename(script));
+  fs.mkdirSync(path.dirname(copy), { recursive: true });
+  fs.copyFileSync(script, copy);
+  return copy;
+}
+
 const TOOL_EVENTS = new Set(['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'PermissionDenied']);
 export const CODEX_HOOK_EVENTS = [
   'SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'PostToolUse',
@@ -24,11 +36,11 @@ export const CODEX_HOOK_EVENTS = [
 ];
 
 function hookCommand(provider) {
-  return `"${process.execPath}" "${HOOK_SCRIPT}" ${provider}`;
+  return `"${process.execPath}" "${stable(HOOK_SCRIPT)}" ${provider}`;
 }
 
 function gateCommand() {
-  return `"${process.execPath}" "${GATE_SCRIPT}"`;
+  return `"${process.execPath}" "${stable(GATE_SCRIPT)}"`;
 }
 
 function readJsonFile(file) {
@@ -60,8 +72,9 @@ function stripOurs(hooks) {
 
 function addOurs(hooks, events, provider, { async = true } = {}) {
   const out = stripOurs(hooks);
+  const command = hookCommand(provider);
   for (const event of events) {
-    const entry = { type: 'command', command: hookCommand(provider), timeout: 5 };
+    const entry = { type: 'command', command, timeout: 5 };
     if (async) entry.async = true;
     const group = TOOL_EVENTS.has(event) ? { matcher: '*', hooks: [entry] } : { hooks: [entry] };
     out[event] = [...(out[event] || []), group];
@@ -85,8 +98,9 @@ export function installClaude({ scope = 'user', cwd, gate = false, waitSec = 120
   settings.hooks = addOurs(settings.hooks, CLAUDE_HOOK_EVENTS, 'claude');
   if (gate) {
     const h = settings.hooks;
-    h.PermissionRequest = [...(h.PermissionRequest || []), { matcher: '*', hooks: [{ type: 'command', command: gateCommand(), timeout: Math.max(30, waitSec + 15) }] }];
-    h.PreToolUse = [...(h.PreToolUse || []), { matcher: 'Agent|Task|Workflow', hooks: [{ type: 'command', command: gateCommand(), timeout: 5 }] }];
+    const command = gateCommand();
+    h.PermissionRequest = [...(h.PermissionRequest || []), { matcher: '*', hooks: [{ type: 'command', command, timeout: Math.max(30, waitSec + 15) }] }];
+    h.PreToolUse = [...(h.PreToolUse || []), { matcher: 'Agent|Task|Workflow', hooks: [{ type: 'command', command, timeout: 5 }] }];
   }
   backupAndWrite(file, settings);
   return { file, events: CLAUDE_HOOK_EVENTS.length, gate };
@@ -94,18 +108,21 @@ export function installClaude({ scope = 'user', cwd, gate = false, waitSec = 120
 
 /** Add a post-commit hook to the git repo at cwd (keeps any existing hook). */
 export function installGit({ cwd = process.cwd() } = {}) {
-  let hooksDir;
+  let hooksDir, roots;
   try {
-    hooksDir = execFileSync('git', ['rev-parse', '--git-path', 'hooks'], { cwd, encoding: 'utf8' }).trim();
+    [hooksDir, ...roots] = execFileSync('git', ['rev-parse', '--git-path', 'hooks', '--git-common-dir', '--show-toplevel'], { cwd, encoding: 'utf8' })
+      .trim().split('\n').map((p) => path.resolve(cwd, p));
   } catch { throw new Error('Not inside a git repository.'); }
-  hooksDir = path.resolve(cwd, hooksDir);
   fs.mkdirSync(hooksDir, { recursive: true });
   const file = path.join(hooksDir, 'post-commit');
-  const line = `"${process.execPath}" "${GIT_SCRIPT}" commit >/dev/null 2>&1 || true # swarmstead`;
+  const line = `"${process.execPath}" "${stable(GIT_SCRIPT)}" commit >/dev/null 2>&1 || true # swarmstead`;
   let text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '#!/bin/sh\n';
   if (!text.includes('# swarmstead')) text = text.replace(/\s*$/, '\n') + line + '\n';
   fs.writeFileSync(file, text, { mode: 0o755 });
-  return { file };
+  // core.hooksPath can point at a folder other repos use too (e.g. a global one)
+  const real = (p) => { try { return fs.realpathSync(p); } catch { return p; } };
+  const inside = (dir, root) => { const rel = path.relative(real(root), real(dir)); return !rel.startsWith('..') && !path.isAbsolute(rel); };
+  return { file, shared: !roots.some((root) => inside(hooksDir, root)) };
 }
 
 export function uninstallGit({ cwd = process.cwd() } = {}) {

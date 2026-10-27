@@ -11,7 +11,7 @@ node bin/swarmstead.js start --open     # live village
 open http://127.0.0.1:4317/web/?demo       # demo; add &hour=22 for night, &lang=vi
 ```
 
-There's no build step: edit files in `web/` or `core/` and reload.
+There's no build step: edit files in `web/` or `core/` and reload. Use `npm run dev` instead of `start` while you work on `server/` or `core/`: the daemon restarts on every save.
 
 ## Good first contributions
 
@@ -24,6 +24,16 @@ There's no build step: edit files in `web/` or `core/` and reload.
 ## Hooks
 
 The list of hook events lives in `server/adapters/claude-hooks.js` (`CLAUDE_HOOK_EVENTS`). After changing it, run `npm run gen:hooks` to regenerate `plugin/hooks/hooks.json`; a test keeps them in sync. Never add an event listed in `NEVER_REGISTER`: those hooks change Claude Code's behaviour just by being present.
+
+## Releasing
+
+The npm package and the plugin ship together: the plugin's autostart runs `npx swarmstead@<plugin version>`.
+
+1. Set the same `version` in `package.json` and `plugin/.claude-plugin/plugin.json` (a test checks they match). Plugin users only get an update when this string changes.
+2. Check the plugin: `claude plugin validate --strict ./plugin` and `claude plugin validate .`
+3. Commit, then `git tag v0.3.0 && git push origin main --tags`. `.github/workflows/release.yml` tests, packs, smoke-tests the tarball through `npx` and publishes. A version with a `-` (like `0.3.0-beta.1`) goes to the `next` tag, so testers run `npx swarmstead@next`.
+
+The very first publish is manual (`npm login && npm publish --access public`). After that, set up trusted publishing on npmjs.com (package > Settings > Trusted publishing > GitHub Actions: `ngoanpv/swarmstead`, workflow `release.yml`) so no npm token lives in the repo.
 
 ## Rules of the road
 

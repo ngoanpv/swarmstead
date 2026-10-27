@@ -4,6 +4,7 @@
     "name": "ngoanpv",
     "url": "https://github.com/ngoanpv"
   },
+  "description": "Swarmstead: watch your Claude Code agents live as a pixel village, with cost, loops, stuck permissions and context pressure.",
   "plugins": [
     {
       "name": "swarmstead",

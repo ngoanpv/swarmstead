@@ -108,7 +108,10 @@ async function install(what) {
   } else if (what === 'git') {
     const r = m.installGit({ cwd: process.cwd() });
     console.log(`${c.green('✓')} Added a post-commit hook: ${r.file}`);
-    console.log(c.dim('  Each commit in this repo now books the agent cost spent since the previous one.'));
+    if (r.shared) {
+      console.log(c.yellow(`  git's core.hooksPath puts this folder outside the repo: every repo that uses ${path.dirname(r.file)} now books its commits.`));
+      console.log(c.yellow('  To undo: swarmstead uninstall git'));
+    } else console.log(c.dim('  Each commit in this repo now books the agent cost spent since the previous one.'));
   } else if (what === 'codex') {
     const r = m.installCodex();
     console.log(`${c.green('✓')} Added ${r.events} hooks to ${r.file}  ${c.yellow('(beta)')}`);

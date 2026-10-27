@@ -25,6 +25,13 @@ test('never registers hooks that change Claude Code behaviour', () => {
   const plugin = JSON.parse(fs.readFileSync(new URL('../plugin/hooks/hooks.json', import.meta.url)));
   assert.deepEqual(Object.keys(plugin.hooks).sort(), [...CLAUDE_HOOK_EVENTS].sort(), 'plugin hooks.json is in sync (npm run gen:hooks)');
   for (const groups of Object.values(plugin.hooks)) for (const g of groups) for (const h of g.hooks) assert.equal(h.async, true);
+  assert.ok(plugin.hooks.SessionStart[0].hooks.some((h) => h.command.includes('swarmstead-up.mjs')), 'autostart on SessionStart');
+});
+
+test('the plugin and the npm package share one version (autostart runs swarmstead@<plugin version>)', () => {
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url)));
+  const plugin = JSON.parse(fs.readFileSync(new URL('../plugin/.claude-plugin/plugin.json', import.meta.url)));
+  assert.equal(plugin.version, pkg.version);
 });
 
 test('workflow agents join one run, by stage, with the workflow name', () => {

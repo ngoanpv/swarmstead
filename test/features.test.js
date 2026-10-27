@@ -3,15 +3,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-feat-'));
 process.env.SWARMSTEAD_HOME = home;
 fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claude: { transcripts: path.join(home, 'none') }, codex: { sessions: path.join(home, 'none') } }));
+// keep git away from the machine's own config (a global core.hooksPath would send test hooks there)
+process.env.GIT_CONFIG_GLOBAL = path.join(home, 'gitconfig');
+process.env.GIT_CONFIG_NOSYSTEM = '1';
+fs.writeFileSync(process.env.GIT_CONFIG_GLOBAL, '');
 
 const { Village } = await import('../core/engine.js');
 const { EV, claimsPassing, gitAction } = await import('../core/schema.js');
@@ -387,7 +392,8 @@ test('installer: gate hooks are opt-in and removed cleanly; git hook keeps yours
   fs.mkdirSync(path.dirname(hook), { recursive: true });
   fs.writeFileSync(hook, '#!/bin/sh\necho mine\n', { mode: 0o755 });
   installGit({ cwd: repo });
-  installGit({ cwd: repo });
+  fs.mkdirSync(path.join(repo, 'src'));
+  assert.equal(installGit({ cwd: path.join(repo, 'src') }).shared, false, 'from a subfolder too');
   let text = fs.readFileSync(hook, 'utf8');
   assert.equal(text.split('# swarmstead').length - 1, 1, 'idempotent');
   assert.match(text, /echo mine/);
@@ -395,4 +401,66 @@ test('installer: gate hooks are opt-in and removed cleanly; git hook keeps yours
   text = fs.readFileSync(hook, 'utf8');
   assert.ok(!text.includes('swarmstead'));
   assert.match(text, /echo mine/);
+});
+
+test('installer: a git hook in a folder outside the repo (core.hooksPath) is flagged as shared', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-git-'));
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-hooks-'));
+  execFileSync('git', ['init', '-q'], { cwd: repo });
+  execFileSync('git', ['config', 'core.hooksPath', elsewhere], { cwd: repo });
+  const r = installGit({ cwd: repo });
+  assert.equal(r.file, path.join(elsewhere, 'post-commit'));
+  assert.equal(r.shared, true);
+  uninstallGit({ cwd: repo });
+  assert.ok(!fs.readFileSync(r.file, 'utf8').includes('swarmstead'));
+});
+
+test('installer: hooks installed from the npx cache point at a stable copy in ~/.swarmstead/hooks', async () => {
+  const pkg = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ss-npx-')), '_npx', 'abc123', 'node_modules', 'swarmstead');
+  for (const dir of ['core', 'server', 'plugin']) fs.cpSync(path.join(ROOT, dir), path.join(pkg, dir), { recursive: true });
+  const fromNpx = await import(pathToFileURL(path.join(pkg, 'server', 'install.js')));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-proj-'));
+  fromNpx.installClaude({ scope: 'project', cwd, gate: true });
+  const s = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.local.json'), 'utf8'));
+  const commands = Object.values(s.hooks).flat().flatMap((g) => g.hooks.map((h) => h.command));
+  assert.ok(commands.every((c) => !c.includes('_npx')), 'nothing points into the npx cache');
+  for (const name of ['swarmstead-hook.mjs', 'swarmstead-gate.mjs']) {
+    const copy = path.join(home, 'hooks', name);
+    assert.ok(commands.some((c) => c.includes(copy)), name);
+    assert.equal(fs.readFileSync(copy, 'utf8'), fs.readFileSync(path.join(ROOT, 'plugin', 'hooks', name), 'utf8'));
+  }
+});
+
+test('plugin autostart: starts the daemon when none answers, only once, and never with "autostart": false', async () => {
+  const script = path.join(ROOT, 'plugin', 'hooks', 'swarmstead-up.mjs');
+  const port = await new Promise((resolve) => { const srv = net.createServer().listen(0, '127.0.0.1', () => { const { port } = srv.address(); srv.close(() => resolve(port)); }); });
+  const url = `http://127.0.0.1:${port}`;
+  const run = (h) => spawnSync(process.execPath, [script], { input: '{"hook_event_name":"SessionStart"}', env: { ...process.env, SWARMSTEAD_HOME: h, SWARMSTEAD_URL: url }, timeout: 5000 });
+  const homeWith = (cfg) => {
+    const h = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-up-'));
+    fs.writeFileSync(path.join(h, 'config.json'), JSON.stringify({ claude: { transcripts: path.join(h, 'none') }, codex: { sessions: path.join(h, 'none') }, ...cfg }));
+    return h;
+  };
+  const healthy = () => fetch(`${url}/api/health`).then((r) => r.ok, () => false);
+
+  const off = homeWith({ autostart: false });
+  const r0 = run(off);
+  assert.equal(r0.status, 0);
+  assert.ok(!fs.existsSync(path.join(off, 'autostart.lock')), 'opted out: nothing started');
+
+  const on = homeWith({});
+  const r1 = run(on);
+  assert.equal(r1.status, 0);
+  assert.equal(String(r1.stdout) + String(r1.stderr), '', 'never prints');
+  const lock = path.join(on, 'autostart.lock');
+  const pid = Number(fs.readFileSync(lock, 'utf8'));
+  try {
+    let up = false;
+    for (let i = 0; i < 50 && !up; i++) { await new Promise((r) => setTimeout(r, 200)); up = await healthy(); }
+    assert.ok(up, 'the daemon came up from this source checkout');
+    assert.equal(run(on).status, 0);
+    assert.equal(Number(fs.readFileSync(lock, 'utf8')), pid, 'a running daemon is left alone');
+  } finally {
+    try { process.kill(pid); } catch {}
+  }
 });

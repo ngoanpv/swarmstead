@@ -14,6 +14,8 @@ for (const e of CLAUDE_HOOK_EVENTS) {
   const h = { type: 'command', command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-hook.mjs" claude', timeout: 5, async: true };
   hooks[e] = [TOOL_EVENTS.has(e) ? { matcher: '*', hooks: [h] } : { hooks: [h] }];
 }
-const out = { description: 'Forward Claude Code lifecycle events to the local Swarmstead daemon (http://127.0.0.1:4317). Async, never blocks, never prints.', hooks };
+// plugin only: start the daemon if it isn't running (opt out with "autostart": false)
+hooks.SessionStart[0].hooks.push({ type: 'command', command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/swarmstead-up.mjs"', timeout: 10, async: true });
+const out = { description: 'Forward Claude Code lifecycle events to the local Swarmstead daemon (http://127.0.0.1:4317), starting it on SessionStart if needed. Async, never blocks, never prints.', hooks };
 fs.writeFileSync(path.join(ROOT, 'plugin/hooks/hooks.json'), JSON.stringify(out, null, 2) + '\n');
 console.log(`wrote plugin/hooks/hooks.json with ${CLAUDE_HOOK_EVENTS.length} events`);

@@ -1,6 +1,6 @@
 {
   "name": "swarmstead",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Watch your Claude Code (and Codex) agents live as pixel characters: handoffs, cost, loops, stuck permissions, context pressure — and familiars that evolve with good habits.",
   "author": "ngoanpv (https://github.com/ngoanpv)",
   "homepage": "https://github.com/ngoanpv/swarmstead#readme",
@@ -28,7 +28,7 @@
   ],
   "scripts": {
     "start": "node bin/swarmstead.js start",
-    "dev": "node bin/swarmstead.js start --open",
+    "dev": "node --watch-path=server --watch-path=core --watch-path=bin bin/swarmstead.js start",
     "test": "node --test",
     "build:demo": "node scripts/build-demo.js",
     "gen:hooks": "node scripts/gen-plugin-hooks.js"
